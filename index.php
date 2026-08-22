@@ -53,6 +53,20 @@ $key = $_GET['module'] ?? 'dashboard';
 if (!isset($modules[$key])) $key='dashboard';
 $table = $modules[$key]['table'];
 
+if (($_GET['ajax'] ?? '') === 'booking_info') {
+    header('Content-Type: application/json; charset=utf-8');
+    $bookingId=(int)($_GET['booking_id']??0); $clientId=(int)($_GET['client_id']??0);
+    $items=[]; $balance=0; $booking=null;
+    if ($bookingId) {
+        $st=db()->prepare("SELECT * FROM v_client_booking_overview WHERE booking_id=?".($clientId?' AND client_id=?':'')." ORDER BY booking_item_id");
+        $st->execute($clientId?[$bookingId,$clientId]:[$bookingId]); $items=$st->fetchAll();
+        $booking=db()->prepare("SELECT b.*,c.name client_name FROM bookings b JOIN clients c ON c.id=b.client_id WHERE b.id=?");
+        $booking->execute([$bookingId]); $booking=$booking->fetch() ?: null;
+    }
+    if ($clientId) { $st=db()->prepare("SELECT balance FROM v_client_balances WHERE client_id=?");$st->execute([$clientId]);$balance=(float)($st->fetchColumn()?:0); }
+    echo json_encode(['booking'=>$booking,'items'=>$items,'balance'=>$balance]); exit;
+}
+
 // Seed a session user for the existing local database. Login can be added without changing modules.
 if (!isset($_SESSION['user'])) {
     $u = db()->query("SELECT u.*, r.name role_name, r.is_admin_role FROM users u JOIN roles r ON r.id=u.role_id WHERE u.active=1 ORDER BY u.id LIMIT 1")->fetch();
@@ -67,26 +81,34 @@ if ($_SERVER['REQUEST_METHOD']==='POST') {
         if ($action==='save' && $table && table_exists($table)) {
             $schema=cols($table); $id=(int)($_POST['id']??0); $data=[];
             // Transaction quick-add: a header without an item is not a valid sale/purchase.
-            if (!$id && in_array($table,['sales','purchases'],true)) {
+            if (!$id && in_array($table,['sales','purchases','bookings'],true)) {
                 $material=(int)($_POST['line_material_id']??0); $qty=(float)($_POST['line_qty']??0); $rate=(float)($_POST['line_rate']??0);
                 if (!$material || $qty<=0 || $rate<0) throw new RuntimeException('Add a material, quantity and rate before saving.');
-                $date=$_POST[$table==='sales'?'sale_date':'purchase_date'] ?: date('Y-m-d');
+                $date=$_POST[$table==='sales'?'sale_date':($table==='purchases'?'purchase_date':'booking_date')] ?: date('Y-m-d');
                 $header=$table==='sales' ? [
                   'auto_bill_no'=>next_bill('sales','SB'),'manual_bill_no'=>$_POST['manual_bill_no']??'','client_id'=>(int)($_POST['client_id']??0),
                   'sale_date'=>$date,'sale_type'=>$_POST['sale_type']??'cash','subtotal'=>0,'subtotal_minor'=>0,'discount'=>(float)($_POST['discount']??0),'discount_minor'=>round((float)($_POST['discount']??0)*100),
                   'tax_amount'=>0,'total_amount'=>0,'total_amount_minor'=>0,'payment_method'=>$_POST['payment_method']??'cash','status'=>'active','revision'=>0,'notes'=>$_POST['notes']??''
-                ] : [
+                ] : ($table==='purchases' ? [
                   'auto_bill_no'=>next_bill('purchases','GRN'),'manual_bill_no'=>$_POST['manual_bill_no']??'','supplier_id'=>(int)($_POST['supplier_id']??0),
                   'purchase_date'=>$date,'bill_date'=>$_POST['bill_date']??$date,'subtotal'=>0,'subtotal_minor'=>0,'loading_cost'=>(float)($_POST['loading_cost']??0),'freight_cost'=>(float)($_POST['freight_cost']??0),'other_expense'=>(float)($_POST['other_expense']??0),'adjustment_amount'=>0,'discount'=>(float)($_POST['discount']??0),'discount_minor'=>round((float)($_POST['discount']??0)*100),
                   'tax_percent'=>0,'tax_amount'=>0,'total_amount'=>0,'total_amount_minor'=>0,'paid_amount'=>0,'paid_amount_minor'=>0,'status'=>'active','revision'=>0,'notes'=>$_POST['notes']??''
-                ];
-                if ($header['client_id']??$header['supplier_id'] ? true : false) { /* required-party validation handled by SQLite */ }
+                ] : [
+                  'auto_bill_no'=>next_bill('bookings','SB-BK'),'manual_bill_no'=>$_POST['manual_bill_no']??'','client_id'=>(int)($_POST['client_id']??0),
+                  'booking_date'=>$date,'total_amount'=>0,'total_amount_minor'=>0,'paid_amount'=>0,'paid_amount_minor'=>0,'discount'=>(float)($_POST['discount']??0),'discount_reason'=>$_POST['discount_reason']??'','status'=>'active','notes'=>$_POST['notes']??''
+                ]);
                 $names=array_keys($header); $q=implode(',',array_fill(0,count($names),'?'));
                 db()->beginTransaction();
                 db()->prepare('INSERT INTO "'.$table.'" ('.implode(',',$names).') VALUES ('.$q.')')->execute(array_values($header));
-                $newId=(int)db()->lastInsertId(); $item=$table==='sales'?'sale_items':'purchase_items';
-                db()->prepare("INSERT INTO $item (".($table==='sales'?'sale_id':'purchase_id').",material_id,qty,rate,rate_minor,amount,amount_minor) VALUES (?,?,?,?,?,?,?)")
-                  ->execute([$newId,$material,$qty,$rate,round($rate*100),$qty*$rate,round($qty*$rate*100)]);
+                $newId=(int)db()->lastInsertId();
+                if ($table==='bookings') {
+                    db()->prepare("INSERT INTO booking_items (booking_id,material_id,qty_booked,rate,rate_minor,amount,amount_minor) VALUES (?,?,?,?,?,?,?)")
+                      ->execute([$newId,$material,$qty,$rate,round($rate*100),$qty*$rate,round($qty*$rate*100)]);
+                } else {
+                    $item=$table==='sales'?'sale_items':'purchase_items';
+                    db()->prepare("INSERT INTO $item (".($table==='sales'?'sale_id':'purchase_id').",material_id,qty,rate,rate_minor,amount,amount_minor) VALUES (?,?,?,?,?,?,?)")
+                      ->execute([$newId,$material,$qty,$rate,round($rate*100),$qty*$rate,round($qty*$rate*100)]);
+                }
                 db()->commit(); flash('success',label($table).' and line item created successfully.'); redirect('?module='.$key);
             }
             foreach($schema as $c) {
@@ -188,7 +210,8 @@ function render_field(array $c, $value): string {
       'account_class'=>['asset','liability','equity','income','expense'], 'unit'=>['bag','kg','ton','piece'],
     ];
     if (isset($enums[$n])) { $o='<option value="">Select…</option>'; foreach($enums[$n] as $x)$o.='<option value="'.h($x).'" '.((string)$value===$x?'selected':'').'>'.h(ucwords(str_replace('_',' ',$x))).'</option>'; return '<label>'.label($n).'<select name="'.h($n).'">'.$o.'</select></label>'; }
-    if (str_ends_with($n,'_id') && $opts=fk_options($n)) { $o='<option value="">Select…</option>'; foreach($opts as $x)$o.='<option value="'.$x['id'].'" '.((string)$value===(string)$x['id']?'selected':'').'>'.h($x['name']).'</option>'; return '<label>'.label($n).'<select name="'.h($n).'">'.$o.'</select></label>'; }
+    if ($n==='booking_id') { $o='<option value="">No booking / regular sale</option>'; foreach(db()->query("SELECT id,auto_bill_no,client_id FROM bookings WHERE status IN ('active','partially_cancelled') ORDER BY id DESC") as $x)$o.='<option value="'.$x['id'].'" data-client="'.$x['client_id'].'" '.((string)$value===(string)$x['id']?'selected':'').'>'.h($x['auto_bill_no']).'</option>'; return '<label>Booking reference<select id="field_booking_id" name="booking_id">'.$o.'</select></label>'; }
+    if (str_ends_with($n,'_id') && $opts=fk_options($n)) { $o='<option value="">Select…</option>'; foreach($opts as $x)$o.='<option value="'.$x['id'].'" '.((string)$value===(string)$x['id']?'selected':'').'>'.h($x['name']).'</option>'; return '<label>'.label($n).'<select id="field_'.h($n).'" name="'.h($n).'">'.$o.'</select></label>'; }
     $input=($type==='REAL'||str_ends_with($n,'_amount')||str_ends_with($n,'_rate')||$n==='amount'||$n==='discount'||str_contains($n,'balance'))?'number':'text';
     if (str_contains($n,'date')) $input='date';
     if (in_array($n,['notes','address','description','reason','discount_reason','page_notes'])) return '<label>'.label($n).'<textarea name="'.h($n).'">'.$v.'</textarea></label>';
@@ -196,7 +219,7 @@ function render_field(array $c, $value): string {
 }
 ?>
 <!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AMSCOPY9 · Cement ERP</title><link rel="stylesheet" href="style.css"></head><body>
+<title>AMSCOPY9 · Cement ERP</title><link rel="stylesheet" href="style.css"><script src="booking.js" defer></script></head><body>
 <aside class="sidebar"><div class="brand"><div class="brandmark">A</div><div><b>AMSCOPY9</b><small>CEMENT ERP</small></div></div>
 <nav><?php foreach($modules as $k=>$m): if($k==='reports') echo '<div class="nav-label">INSIGHTS</div>'; if(in_array($k,['users','audit_log'])) { if($k==='users') echo '<div class="nav-label">ADMINISTRATION</div>'; } ?><a class="<?= $key===$k?'active':'' ?>" href="?module=<?=$k?>"><span class="nav-icon"><?=$m['icon']?></span><?=$m['label']?></a><?php endforeach;?></nav>
 <div class="sidebar-footer"><div class="avatar"><?=h(strtoupper(substr($_SESSION['user']['full_name']??'A',0,1)))?></div><div><b><?=h($_SESSION['user']['full_name']??'Administrator')?></b><small><?=h($_SESSION['user']['role_name']??'Admin')?></small></div><a href="?logout=1" class="logout">↪</a></div></aside>
@@ -213,5 +236,5 @@ function render_field(array $c, $value): string {
 <section class="report-grid"><?php foreach([['v_profit_by_material','Profit by material','material_name','profit'],['v_profit_by_client','Profit by client','client_name','profit'],['v_supplier_balances','Supplier balances','name','balance'],['v_pending_bookings_followup','Booking follow-ups','client_name','outstanding']] as [$vt,$title,$name,$amount]):?><section class="panel"><div class="panel-head"><div><div class="eyebrow">LIVE DATABASE VIEW</div><h3><?=h($title)?></h3></div><span class="muted">Top 8</span></div><div class="table-wrap"><table><thead><tr><th><?=label($name)?></th><th class="right"><?=label($amount)?></th></tr></thead><tbody><?php $dateCol=in_array($vt,['v_profit_by_material','v_profit_by_client'])?'sale_date':($vt==='v_pending_bookings_followup'?'next_followup_date':null); $sql='SELECT * FROM "'.$vt.'"'; $params=[]; if($dateCol){$sql.=' WHERE date("'.$dateCol.'") BETWEEN ? AND ?';$params=[$from,$to];} $sql.=' LIMIT 8'; $st=db()->prepare($sql);$st->execute($params); foreach($st as $r):?><tr><td><?=h($r[$name]??'—')?></td><td class="right"><?=is_numeric($r[$amount]??null)?money($r[$amount]):h($r[$amount]??'—')?></td></tr><?php endforeach;?></tbody></table></div></section><?php endforeach;?></section>
 <?php else: $schema=cols($table); $byName=[]; foreach($schema as $sc) $byName[$sc['name']]=$sc; $edit=(int)($_GET['edit']??0); $record=$edit?db()->query('SELECT * FROM "'.$table.'" WHERE id='.$edit)->fetch():[]; $search=trim($_GET['q']??''); $data=rows_for($table,$search); $visible=list_fields($table); ?>
 <div class="toolbar"><form><input type="hidden" name="module" value="<?=h($key)?>"><input class="search" name="q" value="<?=h($search)?>" placeholder="Search <?=h(strtolower($modules[$key]['label']))?>…"><button class="button">Search</button></form><?php if(!in_array($table,['audit_log'])):?><a class="button primary" href="?module=<?=$key?>&new=1">＋ Add <?=h(rtrim($modules[$key]['label'],'s'))?></a><?php endif;?></div>
-<?php if(isset($_GET['new'])||$edit):?><section class="panel form-panel"><div class="panel-head"><div><div class="eyebrow"><?= $edit?'EDIT RECORD':'NEW RECORD'?></div><h3><?= $edit?'Update':'Create'?> <?=h(rtrim($modules[$key]['label'],'s'))?></h3><p class="helper">Enter the operational details below. Totals and audit fields are maintained by the system.</p></div><a href="?module=<?=$key?>" class="close">×</a></div><form method="post" class="form-grid"><input type="hidden" name="csrf" value="<?=csrf()?>"><input type="hidden" name="action" value="save"><input type="hidden" name="id" value="<?=$edit?>"><?php foreach(form_fields($table) as $fn) if(isset($byName[$fn])) echo render_field($byName[$fn],$record[$fn]??''); ?><?php if(!$edit && in_array($table,['sales','purchases'],true)):?><div class="line-item"><div class="eyebrow">FIRST LINE ITEM</div><h4>Add material to this <?= $table==='sales'?'sale':'purchase'?></h4><div class="line-grid"><label>Material<select name="line_material_id" required><option value="">Select material…</option><?php foreach(db()->query("SELECT id,name,unit FROM materials WHERE active=1 ORDER BY name") as $mat):?><option value="<?=$mat['id']?>"><?=h($mat['name'])?> (<?=h($mat['unit'])?>)</option><?php endforeach;?></select></label><label>Quantity<input type="number" step="0.01" min="0.01" name="line_qty" required></label><label>Rate<input type="number" step="0.01" min="0" name="line_rate" required></label></div></div><?php endif;?><?php if($table==='users'):?><label>New password<input type="password" name="new_password" placeholder="Leave blank to keep current"></label><?php endif;?><div class="form-actions"><a class="button" href="?module=<?=$key?>">Cancel</a><button class="button primary">Save changes</button></div></form></section><?php endif;?>
+<?php if(isset($_GET['new'])||$edit):?><section class="panel form-panel"><div class="panel-head"><div><div class="eyebrow"><?= $edit?'EDIT RECORD':'NEW RECORD'?></div><h3><?= $edit?'Update':'Create'?> <?=h(rtrim($modules[$key]['label'],'s'))?></h3><p class="helper">Enter the operational details below. Totals and audit fields are maintained by the system.</p></div><a href="?module=<?=$key?>" class="close">×</a></div><form method="post" class="form-grid"><input type="hidden" name="csrf" value="<?=csrf()?>"><input type="hidden" name="action" value="save"><input type="hidden" name="id" value="<?=$edit?>"><?php foreach(form_fields($table) as $fn) if(isset($byName[$fn])) echo render_field($byName[$fn],$record[$fn]??''); ?><?php if($table==='sales'):?><div id="booking-panel" class="booking-panel"><div><div class="eyebrow">BOOKING FULFILLMENT</div><h4>Select a booking to see what can be dispatched</h4><p id="booking-empty">Choose a client and booking above. Booked, dispatched, remaining quantities, and current payable will appear here.</p><div id="booking-result"></div></div></div><?php endif;?><?php if(!$edit && in_array($table,['sales','purchases','bookings'],true)):?><div class="line-item"><div class="eyebrow">FIRST LINE ITEM</div><h4>Add material to this <?= $table==='sales'?'sale':($table==='purchases'?'purchase':'booking')?></h4><div class="line-grid"><label>Material<select name="line_material_id" required><option value="">Select material…</option><?php foreach(db()->query("SELECT id,name,unit FROM materials WHERE active=1 ORDER BY name") as $mat):?><option value="<?=$mat['id']?>"><?=h($mat['name'])?> (<?=h($mat['unit'])?>)</option><?php endforeach;?></select></label><label>Quantity<input type="number" step="0.01" min="0.01" name="line_qty" required></label><label>Rate<input type="number" step="0.01" min="0" name="line_rate" required></label></div></div><?php endif;?><?php if($table==='users'):?><label>New password<input type="password" name="new_password" placeholder="Leave blank to keep current"></label><?php endif;?><div class="form-actions"><a class="button" href="?module=<?=$key?>">Cancel</a><button class="button primary">Save changes</button></div></form></section><?php endif;?>
 <section class="panel"><div class="panel-head"><div><div class="eyebrow"><?=count($data)?> RECORDS SHOWN</div><h3><?=h($modules[$key]['label'])?></h3></div><span class="muted">Live SQLite data · showing latest 100</span></div><div class="table-wrap"><table><thead><tr><?php foreach($visible as $n) { if(isset($byName[$n])) { ?><th><?=h(label($n))?></th><?php } } ?><th></th></tr></thead><tbody><?php foreach($data as $r):?><tr><?php foreach($visible as $n) { if(isset($byName[$n])) { ?><td><?=is_numeric($r[$n]??null)&&($n==='amount'||str_contains($n,'total')||str_contains($n,'balance')||str_contains($n,'subtotal')||str_contains($n,'rate'))?money($r[$n]):h(mb_strimwidth((string)($r[$n]??'—'),0,34,'…'))?></td><?php } } ?><td class="actions"><?php if($table!=='audit_log'):?><a href="?module=<?=$key?>&edit=<?=$r['id']?>">Edit</a><?php endif;?><?php if(!in_array($table,['audit_log','users','accounts'])):?><form method="post" onsubmit="return confirm('Delete this record?')"><input type="hidden" name="csrf" value="<?=csrf()?>"><input type="hidden" name="action" value="delete"><input type="hidden" name="id" value="<?=$r['id']?>"><button>Delete</button></form><?php endif;?></td></tr><?php endforeach;?></tbody></table></div></section><?php endif;?></main></body></html>
