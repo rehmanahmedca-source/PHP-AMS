@@ -1,0 +1,6 @@
+.DS_Store
+*.log
+.phpunit.result.cache
+vendor/
+data/*.sqlite
+data/*.sqlite3
