@@ -980,6 +980,53 @@ function item_rows(string $table, string $fk, int $id): array {
     return $st->fetchAll();
 }
 
+/* ---------------- UI helpers ---------------- */
+function icon_btn(string $href, string $icon, string $title, string $cls = 'view'): string {
+    return '<a class="act-btn ' . h($cls) . '" href="' . h($href) . '" title="' . h($title) . '" aria-label="' . h($title) . '">' . $icon . '</a>';
+}
+function icon_post(int $id, string $action, string $icon, string $title, string $cls, string $confirm = ''): string {
+    $on = $confirm ? ' onsubmit="return confirm(\'' . h($confirm) . '\')"' : '';
+    return '<span class="act-btn ' . h($cls) . '" title="' . h($title) . '"><form method="post"' . $on . '>'
+        . '<input type="hidden" name="csrf" value="' . h(csrf()) . '">'
+        . '<input type="hidden" name="action" value="' . h($action) . '">'
+        . '<input type="hidden" name="id" value="' . $id . '">'
+        . '<button type="submit" aria-label="' . h($title) . '">' . $icon . '</button></form></span>';
+}
+function action_icons(string $mod, int $id, array $opt = []): string {
+    $s = '<div class="act-icons">';
+    if ($opt['view'] ?? true) $s .= icon_btn("?module=$mod&view=$id", '👁', 'View', 'view');
+    if ($opt['recv'] ?? false) $s .= icon_btn("?module=$mod&view=$id", '⬇️', 'Dispatch / Receive', 'recv');
+    if ($opt['edit'] ?? true) $s .= icon_btn("?module=$mod&edit=$id", '✏️', 'Edit', 'edit');
+    if ($opt['print'] ?? false) $s .= icon_btn("?module=$mod&view=$id", '🖨️', 'Print', 'print');
+    if ($opt['del'] ?? true) {
+        $label = $opt['delLabel'] ?? 'Delete';
+        $s .= icon_post($id, 'delete', '🗑', $label, 'del', "Are you sure? $label this record?");
+    }
+    return $s . '</div>';
+}
+function paginate(int $total, int $perPage, int $page, string $baseUrl): string {
+    $pages = max(1, (int)ceil($total / $perPage));
+    if ($pages < 2) return '';
+    $h = '<div class="pager">';
+    if ($page > 1) $h .= '<a href="' . h($baseUrl . '&page=' . ($page - 1)) . '">← Previous</a>';
+    $h .= '<span class="cur">' . $page . ' / ' . $pages . '</span>';
+    if ($page < $pages) $h .= '<a href="' . h($baseUrl . '&page=' . ($page + 1)) . '">Next →</a>';
+    return $h . '</div>';
+}
+function filter_card_open(): void { echo '<section class="filter-card"><div class="fc-grid">'; }
+function filter_field(string $label, string $html): void { echo '<label>' . h($label) . $html . '</label>'; }
+function filter_card_close(string $primary = 'Apply', bool $reset = true, string $module = ''): void {
+    echo '</div><div class="fc-actions"><button class="button primary" type="submit">▽ ' . h($primary) . '</button>';
+    if ($reset) echo '<a class="button" href="?module=' . h($module ?: ($_GET['module'] ?? '')) . '">Reset</a>';
+    echo '<div class="spacer"></div></div></section>';
+}
+function money_page_hero(string $icon, string $title, string $sub, array $crumbs = [], string $rightBtn = ''): void {
+    $links = array_map(fn($c) => '<a class="button" href="'.$c[1].'">'.$c[0].'</a>', $crumbs);
+    echo '<section class="page-hero money-hero"><div>';
+    echo '<h2>'.$icon.' '.h($title).'</h2><p>'.h($sub).'</p>';
+    echo '</div><div class="hero-actions">'.implode('', $links).$rightBtn.'</div></section>';
+}
+
 /* ---------------- Money / accounts helpers ---------------- */
 function account_channel(array $a): string {
     $n = strtoupper($a['name'] ?? '');
@@ -1008,13 +1055,6 @@ function date_filter(): array {
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$from)) $from = date('Y-m-d', strtotime('-30 days'));
     if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$to))   $to   = date('Y-m-d');
     return [$from, $to];
-}
-function money_page_hero(string $icon, string $title, string $sub, array $crumbs = []): void {
-    $links = array_merge([['Dashboard', '?module=dashboard'], ['Accounts', '?module=accounts']], $crumbs);
-    $btns = array_map(fn($c) => '<a class="button" href="'.$c[1].'">← '.h($c[0]).'</a>', $links);
-    echo '<section class="page-hero money-hero"><div>';
-    echo '<h2>'.$icon.' '.h($title).'</h2><p>'.h($sub).'</p>';
-    echo '</div><div class="hero-actions">'.implode('', $btns).'</div></section>';
 }
 function kpi_card(string $label, string $value, string $tone, string $meta = '', string $link = '', string $btn = ''): void {
     $tag = $link ? 'a' : 'div';
