@@ -87,22 +87,22 @@ function badge(string $v): string {
 }
 
 $modules = [
-    'dashboard' => ['label' => 'Dashboard', 'icon' => '⌂', 'group' => ''],
-    'sales' => ['label' => 'Sales', 'icon' => '▣', 'group' => 'OPERATIONS'],
-    'bookings' => ['label' => 'Bookings', 'icon' => '◫', 'group' => 'OPERATIONS'],
-    'purchases' => ['label' => 'Purchases / GRN', 'icon' => '▤', 'group' => 'OPERATIONS'],
-    'payments' => ['label' => 'Payments', 'icon' => '↔', 'group' => 'OPERATIONS'],
-    'returns' => ['label' => 'Returns', 'icon' => '↩', 'group' => 'OPERATIONS'],
-    'pending_bills' => ['label' => 'Pending Bills', 'icon' => '◷', 'group' => 'OPERATIONS'],
-    'materials' => ['label' => 'Materials & Stock', 'icon' => '▥', 'group' => 'MASTERS'],
-    'clients' => ['label' => 'Clients', 'icon' => '◎', 'group' => 'MASTERS'],
-    'suppliers' => ['label' => 'Suppliers', 'icon' => '◇', 'group' => 'MASTERS'],
-    'delivery_persons' => ['label' => 'Delivery Team', 'icon' => '♧', 'group' => 'MASTERS'],
-    'accounts' => ['label' => 'Accounts', 'icon' => '◉', 'group' => 'MASTERS'],
-    'reports' => ['label' => 'Reports', 'icon' => '▤', 'group' => 'INSIGHTS'],
-    'users' => ['label' => 'Users & Roles', 'icon' => '♙', 'group' => 'ADMINISTRATION'],
-    'settings' => ['label' => 'Settings', 'icon' => '⚙', 'group' => 'ADMINISTRATION'],
-    'audit_log' => ['label' => 'Audit Trail', 'icon' => '◌', 'group' => 'ADMINISTRATION'],
+    'dashboard'       => ['label' => 'Dashboard',        'icon' => '📊', 'group' => ''],
+    'sales'           => ['label' => 'Sales',            'icon' => '🧾', 'group' => 'TRANSACTIONS'],
+    'bookings'        => ['label' => 'Bookings',         'icon' => '🗓️', 'group' => 'TRANSACTIONS'],
+    'purchases'       => ['label' => 'Purchases / GRN',  'icon' => '🚚', 'group' => 'TRANSACTIONS'],
+    'payments'        => ['label' => 'Payments',         'icon' => '💸', 'group' => 'TRANSACTIONS'],
+    'returns'         => ['label' => 'Returns',          'icon' => '↩️', 'group' => 'TRANSACTIONS'],
+    'pending_bills'   => ['label' => 'Pending Bills',    'icon' => '⏳', 'group' => 'TRANSACTIONS'],
+    'materials'       => ['label' => 'Stock Summary',    'icon' => '📦', 'group' => 'INVENTORY'],
+    'accounts'        => ['label' => 'Accounts',         'icon' => '🏦', 'group' => 'MONEY'],
+    'clients'         => ['label' => 'Client Ledger',    'icon' => '👥', 'group' => 'LEDGERS'],
+    'suppliers'       => ['label' => 'Supplier Ledger',  'icon' => '🏭', 'group' => 'LEDGERS'],
+    'delivery_persons'=> ['label' => 'Delivery Team',    'icon' => '🚛', 'group' => 'LEDGERS'],
+    'reports'         => ['label' => 'Daily Breakdown',  'icon' => '📈', 'group' => 'INSIGHTS'],
+    'audit_log'       => ['label' => 'Audit Trail',      'icon' => '🛡️', 'group' => 'INSIGHTS'],
+    'users'           => ['label' => 'Users & Roles',    'icon' => '♟️', 'group' => 'ADMINISTRATION'],
+    'settings'        => ['label' => 'Settings',         'icon' => '⚙️', 'group' => 'ADMINISTRATION'],
 ];
 $key = $_GET['module'] ?? 'dashboard';
 if (!isset($modules[$key])) $key = 'dashboard';
@@ -126,33 +126,49 @@ function login_user(array $u): void {
 function render_login(string $error = ''): never {
     $company = setting('company_name') ?: APP_NAME;
     $csrf = csrf();
-    $logo = strtoupper(substr($company, 0, 1));
     http_response_code($error ? 401 : 200);
+    if ($error && !isset($_SESSION['flash'])) flash('error', $error);
     ?>
 <!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Sign in · <?= h($company) ?></title>
+<title>Login · AMS SYSTEM</title>
 <link rel="stylesheet" href="style.css">
 </head><body class="login-body">
 <div class="login-card">
-  <div class="login-brand"><div class="brandmark lg"><?= h($logo) ?></div><div><b><?= h($company) ?></b><small><?= h(APP_TAGLINE) ?></small></div></div>
-  <h1>Welcome back</h1>
-  <p class="muted">Sign in to continue to your account.</p>
-  <?php if ($error): ?><div class="flash error" style="margin:12px 0"><?= h($error) ?></div><?php endif; ?>
-  <form method="post" autocomplete="on">
+  <span class="login-top">☀️ Light</span>
+  <div class="login-brand">
+    <div class="brand-word">AMS <span class="accent">SYSTEM</span></div>
+    <span class="tag">FOR EASE ACCESS</span>
+  </div>
+  <?php if (!empty($_SESSION['flash'])): [$ft, $fm] = $_SESSION['flash']; unset($_SESSION['flash']); ?>
+    <div class="flash <?= h($ft) ?>" style="margin:4px 0 18px"><?= h($fm) ?></div>
+  <?php else: ?>
+    <div class="flash error" style="margin:4px 0 18px; background:#fee2e2; border-color:#fecaca; color:#991b1b;">Please log in to access this page.</div>
+  <?php endif; ?>
+  <form method="post" autocomplete="on" id="login-form">
     <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
     <input type="hidden" name="action" value="login">
     <label class="field">Username
-      <input type="text" name="username" required autofocus autocomplete="username" value="<?= h($_POST['username'] ?? '') ?>">
+      <span class="input-ico">👤</span>
+      <input type="text" name="username" required autofocus autocomplete="username" placeholder="Enter username" value="<?= h($_POST['username'] ?? '') ?>">
     </label>
     <label class="field">Password
-      <input type="password" name="password" required autocomplete="current-password">
+      <span class="input-ico">🔒</span>
+      <input type="password" name="password" id="password" required autocomplete="current-password" placeholder="Enter password">
     </label>
-    <label class="check" style="margin:6px 0 14px"><input type="checkbox" name="remember" value="1"> <span>Remember me on this device</span></label>
-    <button class="button primary block" type="submit">Sign in</button>
+    <div class="login-options">
+      <label><input type="checkbox" id="show-pw"> Show password</label>
+      <label><input type="checkbox" name="remember" value="1"> Remember me</label>
+    </div>
+    <button class="button primary block" type="submit">🔐 Secure Login</button>
   </form>
-  <div class="login-foot">© <?= date('Y') ?> <?= h($company) ?> · AMS SYSTEM FOR EASE</div>
+  <div class="login-foot">© <?= date('Y') ?> AMS SYSTEM FOR EASE</div>
 </div>
+<script>
+document.getElementById('show-pw')?.addEventListener('change', function(){
+  var p=document.getElementById('password'); p.type=this.checked?'text':'password';
+});
+</script>
 </body></html><?php
     exit;
 }
@@ -1002,7 +1018,10 @@ $first = explode(' ', (string)($_SESSION['user']['full_name'] ?? 'Admin'))[0];
 </head>
 <body>
 <aside class="sidebar">
-  <div class="brand"><div class="brandmark">A</div><div><b>AMSCOPY9</b><small>CEMENT ERP</small></div></div>
+  <div class="brand">
+    <div class="brand-word">AMS <b class="accent">SYSTEM</b></div>
+    <span class="tag">FOR EASE</span>
+  </div>
   <nav>
     <?php $last = ''; foreach ($modules as $k => $m):
         if ($m['group'] && $m['group'] !== $last) { echo '<div class="nav-label">' . h($m['group']) . '</div>'; $last = $m['group']; }
@@ -1010,11 +1029,12 @@ $first = explode(' ', (string)($_SESSION['user']['full_name'] ?? 'Admin'))[0];
       <a class="<?= $key === $k ? 'active' : '' ?>" href="?module=<?= h($k) ?>"><span class="nav-icon"><?= $m['icon'] ?></span><?= h($m['label']) ?></a>
     <?php endforeach; ?>
   </nav>
+  <button class="theme-toggle" type="button" onclick="document.body.classList.toggle('dark'); this.firstChild.textContent = document.body.classList.contains('dark') ? '🌙' : '☀️';">☀️ Light</button>
   <div class="sidebar-footer">
     <div class="avatar"><?= h(strtoupper(substr((string)($_SESSION['user']['full_name'] ?? 'A'), 0, 1))) ?></div>
     <div><b><?= h($_SESSION['user']['full_name'] ?? 'Administrator') ?></b><small><?= h($_SESSION['user']['role_name'] ?? 'Admin') ?></small></div>
-    <a href="?logout=1" class="logout" title="Sign out">↪</a>
   </div>
+  <a href="?logout=1" class="logout-btn">↪ Logout</a>
 </aside>
 <main>
 <header>
@@ -1033,25 +1053,56 @@ $first = explode(' ', (string)($_SESSION['user']['full_name'] ?? 'Admin'))[0];
 
 <?php if ($key === 'dashboard'):
     $cards = [
-        ['label' => 'Sales this month', 'value' => money(scalar("SELECT COALESCE(SUM(total_amount),0) FROM sales WHERE strftime('%Y-%m',sale_date)=strftime('%Y-%m','now') AND status!='cancelled'")), 'tone' => 'blue', 'meta' => 'Revenue posted'],
-        ['label' => 'Open receivables', 'value' => money(scalar("SELECT COALESCE(SUM(amount),0) FROM pending_bills WHERE is_paid=0")), 'tone' => 'amber', 'meta' => 'Unpaid pending bills'],
-        ['label' => 'Stock on hand', 'value' => number_format(scalar("SELECT COUNT(*) FROM v_material_stock WHERE current_qty>0")), 'tone' => 'teal', 'meta' => 'Materials with quantity'],
-        ['label' => 'Open bookings', 'value' => number_format(scalar("SELECT COUNT(*) FROM bookings WHERE status IN ('active','partially_cancelled')")), 'tone' => 'rose', 'meta' => 'Still to dispatch'],
+        ['label' => 'TOTAL INVENTORY', 'value' => money(scalar("SELECT COALESCE(SUM(current_stock_value),0) FROM v_material_stock")), 'tone' => 'orange', 'meta' => 'Lives currently in stock', 'link' => '?module=materials'],
+        ['label' => 'REGISTERED CLIENTS', 'value' => number_format(scalar("SELECT COUNT(*) FROM clients WHERE active=1")), 'tone' => 'indigo', 'meta' => 'Active customer base', 'link' => '?module=clients'],
+        ['label' => 'DAILY CASH RECEIVED', 'value' => money(scalar("SELECT COALESCE(SUM(amount),0) FROM payments WHERE direction='in' AND date(payment_date)=date('now')")), 'tone' => 'green', 'meta' => 'Cash posted today ' . date('M d, Y'), 'link' => '?module=payments'],
+        ['label' => 'DAILY DUE AMOUNT', 'value' => money(scalar("SELECT COALESCE(SUM(amount),0) FROM pending_bills WHERE is_paid=0")), 'tone' => 'rose', 'meta' => 'Across all open bills', 'link' => '?module=pending_bills'],
+        ['label' => 'TOTAL OUTSTANDING', 'value' => money(scalar("SELECT COALESCE(SUM(amount),0) FROM pending_bills WHERE is_paid=0")), 'tone' => 'red', 'meta' => 'Review unpaid bills', 'link' => '?module=pending_bills'],
+        ['label' => 'ACCOUNTS HUB', 'value' => number_format(scalar("SELECT COUNT(*) FROM accounts WHERE active=1")), 'tone' => 'purple', 'meta' => 'Cash + bank + transfers', 'link' => '?module=accounts'],
+        ['label' => 'CASH FLOW VIEW', 'value' => money(scalar("SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) FROM payments")), 'tone' => 'blue', 'meta' => 'Receipts & payments report', 'link' => '?module=reports'],
+        ['label' => 'AUDIT', 'value' => number_format(scalar("SELECT COUNT(*) FROM audit_log")), 'tone' => 'amber', 'meta' => 'Entries in audit trail', 'link' => '?module=audit_log'],
     ];
+    $dueCount = (int)scalar("SELECT COUNT(*) FROM pending_bills WHERE is_paid=0");
     $recent = db()->query("SELECT s.id,s.auto_bill_no,s.sale_date,s.total_amount,s.status,s.sale_type,c.name client_name FROM sales s LEFT JOIN clients c ON c.id=s.client_id ORDER BY s.id DESC LIMIT 8")->fetchAll();
-    $low = db()->query("SELECT * FROM v_low_stock_alerts WHERE reorder_level > 0 LIMIT 6")->fetchAll();
+    $low = db()->query("SELECT * FROM v_low_stock_alerts WHERE reorder_level > 0 ORDER BY current_qty ASC LIMIT 8")->fetchAll();
 ?>
-<section class="welcome">
+<section class="page-hero">
   <div>
-    <div class="eyebrow"><?= strtoupper(date('l, F j, Y')) ?></div>
-    <h2><?= h($greet) ?>, <?= h($first) ?>.</h2>
+    <div class="eyebrow">📊 System Dashboard · <?= date('F j, Y') ?></div>
+    <h2><?= h($greet) ?>, <?= h($first) ?></h2>
     <p>Live picture of <?= h($company) ?> — sales, bookings, stock and collections.</p>
   </div>
-  <a class="button primary" href="?module=sales&new=1">＋ New sale</a>
+  <div class="hero-actions">
+    <a class="button" href="?module=materials">📦 Stock Summary</a>
+    <a class="button" href="?module=clients">👥 Clients</a>
+  </div>
 </section>
+
+<?php if ($dueCount > 0): ?>
+<div class="reminder">
+  <span class="rem-icon">⏰</span>
+  <div class="rem-body"><b>Deadline Reminder</b><small>You have <?= $dueCount ?> due entries. Please review and mark reminders as done.</small></div>
+  <span class="rem-count"><?= $dueCount > 99 ? '99+' : $dueCount ?></span>
+  <a class="button primary" href="?module=pending_bills">Open Notifications</a>
+</div>
+<?php endif; ?>
+
+<div class="quick-pills">
+  <a class="quick-pill" href="?module=materials">📈 Stock Summary</a>
+  <a class="quick-pill" href="?module=reports">📋 Daily Breakdown</a>
+  <a class="quick-pill" href="?module=sales&new=1">🛒 New Sale</a>
+  <a class="quick-pill" href="?module=bookings&new=1">🗓️ New Booking</a>
+  <a class="quick-pill" href="?module=payments&new=1">📞 Payments</a>
+  <a class="quick-pill" href="?module=audit_log">🧾 Client Ledger</a>
+</div>
+
 <div class="cards"><?php foreach ($cards as $c): ?>
-  <div class="card"><div class="card-top"><span><?= h($c['label']) ?></span><i class="<?= h($c['tone']) ?>">◈</i></div><strong><?= h($c['value']) ?></strong><small><?= h($c['meta']) ?></small></div>
+  <a href="<?= h($c['link']) ?>" class="card tone-<?= h($c['tone']) ?>" style="text-decoration:none;color:inherit">
+    <div class="card-top"><span><?= h($c['label']) ?></span><i>◈</i></div>
+    <strong><?= h($c['value']) ?></strong><small><?= h($c['meta']) ?></small>
+  </a>
 <?php endforeach; ?></div>
+
 <div class="grid-two">
   <section class="panel">
     <div class="panel-head"><div><div class="eyebrow">RECENT ACTIVITY</div><h3>Latest sales</h3></div><a href="?module=sales">View all →</a></div>
@@ -1068,17 +1119,17 @@ $first = explode(' ', (string)($_SESSION['user']['full_name'] ?? 'Admin'))[0];
     </tbody></table></div>
   </section>
   <section class="panel">
-    <div class="panel-head"><div><div class="eyebrow">QUICK ACTIONS</div><h3>Work faster</h3></div></div>
+    <div class="panel-head"><div><div class="eyebrow">⚡ QUICK ACTIONS</div><h3>Work faster</h3></div></div>
     <div class="quick-grid">
-      <a href="?module=clients&new=1">＋<b>Add client</b><small>Register a customer</small></a>
-      <a href="?module=bookings&new=1">＋<b>New booking</b><small>Advance order</small></a>
-      <a href="?module=purchases&new=1">＋<b>Record purchase</b><small>Add stock (GRN)</small></a>
-      <a href="?module=payments&new=1">＋<b>Record payment</b><small>Cash in or out</small></a>
+      <a href="?module=clients&new=1"><span class="qi" style="background:#dcfce7;color:#166534">👥</span><span><b>Add client</b><small>Register a customer</small></span></a>
+      <a href="?module=bookings&new=1"><span class="qi" style="background:#ede9fe;color:#5b21b6">🗓️</span><span><b>New booking</b><small>Advance order</small></span></a>
+      <a href="?module=purchases&new=1"><span class="qi" style="background:#dbeafe;color:#1e40af">🚚</span><span><b>Record purchase</b><small>Add stock (GRN)</small></span></a>
+      <a href="?module=payments&new=1"><span class="qi" style="background:#ffedd5;color:#9a3412">💸</span><span><b>Record payment</b><small>Cash in or out</small></span></a>
     </div>
     <?php if ($low): ?>
-      <div class="panel-head"><div><div class="eyebrow">STOCK</div><h3>Below reorder</h3></div></div>
+      <div class="panel-head"><div><div class="eyebrow">📦 STOCK</div><h3>Below reorder</h3></div></div>
       <div class="table-wrap"><table><thead><tr><th>Material</th><th class="right">Qty</th></tr></thead><tbody>
-      <?php foreach ($low as $r): ?><tr><td><?= h($r['name']) ?></td><td class="right"><?= h($r['current_qty']) ?> <?= h($r['unit']) ?></td></tr><?php endforeach; ?>
+      <?php foreach ($low as $r): ?><tr><td><?= h($r['name']) ?></td><td class="right" style="color:var(--red);font-weight:700"><?= h($r['current_qty']) ?> <?= h($r['unit']) ?></td></tr><?php endforeach; ?>
       </tbody></table></div>
     <?php endif; ?>
   </section>
