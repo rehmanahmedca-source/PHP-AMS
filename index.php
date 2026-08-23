@@ -272,6 +272,44 @@ function cats(string $type): array {
 
 /* ---------------- AJAX ---------------- */
 $ajax = $_GET['ajax'] ?? '';
+if ($ajax === 'client_overview') {
+    header('Content-Type: application/json; charset=utf-8');
+    $clientId = (int)($_GET['client_id'] ?? 0);
+    if (!$clientId) { echo json_encode(['balance' => 0, 'bookings' => []]); exit; }
+    
+    // Get client balance
+    $st = db()->prepare("SELECT balance FROM v_client_balances WHERE client_id=?");
+    $st->execute([$clientId]);
+    $balance = (float)($st->fetchColumn() ?: 0);
+    
+    // Get all open bookings with their items
+    $bookings = db()->prepare("
+        SELECT b.id, b.auto_bill_no, b.manual_bill_no, b.booking_date, b.total_amount, b.paid_amount, b.status,
+               (b.total_amount - b.paid_amount) as outstanding
+        FROM bookings b 
+        WHERE b.client_id = ? AND b.status IN ('active','partially_cancelled')
+        ORDER BY b.booking_date DESC
+    ");
+    $bookings->execute([$clientId]);
+    $bookings = $bookings->fetchAll();
+    
+    // For each booking, get items
+    foreach ($bookings as &$booking) {
+        $items = db()->prepare("
+            SELECT bi.*, m.name as material_name, m.unit,
+                   (bi.qty_booked - bi.qty_dispatched - bi.qty_cancelled) as qty_pending
+            FROM booking_items bi
+            JOIN materials m ON m.id = bi.material_id
+            WHERE bi.booking_id = ?
+            ORDER BY bi.id
+        ");
+        $items->execute([$booking['id']]);
+        $booking['items'] = $items->fetchAll();
+    }
+    
+    echo json_encode(['balance' => $balance, 'bookings' => $bookings]);
+    exit;
+}
 if ($ajax === 'booking_info') {
     header('Content-Type: application/json; charset=utf-8');
     $bookingId = (int)($_GET['booking_id'] ?? 0);
@@ -415,6 +453,10 @@ function save_sale(): never {
     if (!in_array($payMethod, ['cash', 'bank', 'credit'], true)) $payMethod = 'cash';
     $accountId = (int)($_POST['payment_account_id'] ?? 0) ?: null;
     $manual = trim((string)($_POST['manual_bill_no'] ?? ''));
+    $bankName = trim((string)($_POST['bank_name'] ?? '')) ?: null;
+    $accountName = trim((string)($_POST['account_name'] ?? '')) ?: null;
+    $accountNo = trim((string)($_POST['account_no'] ?? '')) ?: null;
+    $deliveryRent = max(0, num($_POST['delivery_rent_cost'] ?? 0));
 
     if (!$id) {
         $items = posted_items();
@@ -426,9 +468,9 @@ function save_sale(): never {
         $auto = next_bill('SL', 'SB-SL-');
         if ($manual === '') $manual = $auto;
         db()->beginTransaction();
-        db()->prepare("INSERT INTO sales (auto_bill_no,manual_bill_no,client_id,sale_date,sale_type,booking_id,subtotal,subtotal_minor,discount,discount_minor,discount_reason,tax_amount,total_amount,total_amount_minor,total_paid_cache,total_paid_cache_minor,payment_method,payment_account_id,status,revision,created_by,notes)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?, 'active',0,?,?)")
-            ->execute([$auto, $manual, $clientId, $date, $saleType, $bookingId ?: null, $subtotal, minor($subtotal), $discount, minor($discount), post('discount_reason') ?: null, $total, minor($total), $paid, minor($paid), $payMethod, $accountId, uid(), post('notes') ?: null]);
+        db()->prepare("INSERT INTO sales (auto_bill_no,manual_bill_no,client_id,sale_date,sale_type,booking_id,subtotal,subtotal_minor,discount,discount_minor,discount_reason,tax_amount,total_amount,total_amount_minor,total_paid_cache,total_paid_cache_minor,payment_method,payment_account_id,bank_name,account_name,account_no,delivery_rent_cost,delivery_rent_cost_minor,status,revision,created_by,notes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?,?,?,?,?,?, 'active',0,?,?)")
+            ->execute([$auto, $manual, $clientId, $date, $saleType, $bookingId ?: null, $subtotal, minor($subtotal), $discount, minor($discount), post('discount_reason') ?: null, $total, minor($total), $paid, minor($paid), $payMethod, $accountId, $bankName, $accountName, $accountNo, $deliveryRent, minor($deliveryRent), uid(), post('notes') ?: null]);
         $newId = (int)db()->lastInsertId();
         $ins = db()->prepare("INSERT INTO sale_items (sale_id,material_id,qty,rate,rate_minor,amount,amount_minor) VALUES (?,?,?,?,?,?,?)");
         foreach ($items as $it) {
@@ -437,7 +479,7 @@ function save_sale(): never {
         }
         $dp = (int)($_POST['delivery_person_id'] ?? 0);
         if ($dp) {
-            db()->prepare("INSERT INTO sale_delivery_persons (sale_id,delivery_person_id,bags_delivered,rent_amount,rent_amount_minor) VALUES (?,?,0,0,0)")->execute([$newId, $dp]);
+            db()->prepare("INSERT INTO sale_delivery_persons (sale_id,delivery_person_id,bags_delivered,rent_amount,rent_amount_minor) VALUES (?,?,0,?,?)")->execute([$newId, $dp, $deliveryRent, minor($deliveryRent)]);
         }
         $cname = party_name('client', $clientId);
         db()->prepare("INSERT INTO pending_bills (client_id,client_name_snapshot,bill_no,bill_kind,source_module,source_table,source_id,source_bill_no,transaction_type,amount,amount_minor,reason,is_paid,is_cash,created_by)
@@ -449,8 +491,8 @@ function save_sale(): never {
         redirect('?module=sales&view=' . $newId);
     }
 
-    db()->prepare("UPDATE sales SET client_id=?, sale_date=?, sale_type=?, booking_id=?, manual_bill_no=?, discount=?, discount_minor=?, discount_reason=?, payment_method=?, payment_account_id=?, notes=?, updated_by=? WHERE id=?")
-        ->execute([$clientId, $date, $saleType, $bookingId ?: null, $manual !== '' ? $manual : 'MB', $discount, minor($discount), post('discount_reason') ?: null, $payMethod, $accountId, post('notes') ?: null, uid(), $id]);
+    db()->prepare("UPDATE sales SET client_id=?, sale_date=?, sale_type=?, booking_id=?, manual_bill_no=?, discount=?, discount_minor=?, discount_reason=?, payment_method=?, payment_account_id=?, bank_name=?, account_name=?, account_no=?, delivery_rent_cost=?, delivery_rent_cost_minor=?, notes=?, updated_by=? WHERE id=?")
+        ->execute([$clientId, $date, $saleType, $bookingId ?: null, $manual !== '' ? $manual : 'MB', $discount, minor($discount), post('discount_reason') ?: null, $payMethod, $accountId, $bankName, $accountName, $accountNo, $deliveryRent, minor($deliveryRent), post('notes') ?: null, uid(), $id]);
     $row = db()->prepare('SELECT subtotal FROM sales WHERE id=?');
     $row->execute([$id]);
     $subtotal = (float)$row->fetchColumn();
@@ -1406,7 +1448,7 @@ elseif ($key === 'sales'):
             echo sel('sale_type', 'Sale type', $record['sale_type'] ?? 'cash', ['cash' => 'Cash', 'credit' => 'Credit', 'booking' => 'Booking dispatch', 'booking_credit' => 'Booking credit']);
             echo inp('manual_bill_no', 'Manual bill no', $record['manual_bill_no'] ?? '');
             section_end();
-            echo '<div id="client-meta" class="client-meta hidden" style="margin:0 0 16px"></div>';
+            echo '<div id="client-overview" class="client-overview hidden"></div>';
             echo '<div class="form-section' . (in_array($record['sale_type'] ?? '', ['booking', 'booking_credit'], true) ? ' sec-delivery' : ' hidden') . '" id="booking-wrap">';
             echo '<h4>🔗 Booking dispatch</h4><div class="form-grid">';
             echo combo('booking_id', 'bookings', 'Booking', $record['booking_id'] ?? '', false, 'Search booking bill…');
@@ -1418,16 +1460,22 @@ elseif ($key === 'sales'):
             } else {
                 $rows = item_rows('sale_items', 'sale_id', $edit);
                 existing_items_table($rows, ['material_name' => 'Material', 'qty' => 'Qty', 'rate' => 'Rate', 'amount' => 'Amount']);
-                section_no_grid('💰 Discount', 'sec-payment');
+                section_no_grid('💰 Adjustments', 'sec-payment');
                 echo '<div class="form-grid">';
                 echo inp('discount', 'Discount', $record['discount'] ?? 0, 'number');
                 echo inp('discount_reason', 'Discount reason', $record['discount_reason'] ?? '');
                 echo '</div></div>';
             }
-            section('💳 Payment & Delivery', 'sec-payment');
+            section('💳 Payment', 'sec-payment');
             echo sel('payment_method', 'Payment method', $record['payment_method'] ?? 'cash', ['' => '—', 'cash' => 'Cash', 'bank' => 'Bank', 'credit' => 'Credit']);
             echo '<div id="account-wrap">' . combo('payment_account_id', 'accounts', 'Account', $record['payment_account_id'] ?? '', false, 'Search account…') . '</div>';
+            echo inp('bank_name', 'Bank name', $record['bank_name'] ?? '', 'text', false, 'placeholder="e.g. HBL, MCB"');
+            echo inp('account_name', 'Account holder', $record['account_name'] ?? '');
+            echo inp('account_no', 'Account / cheque no', $record['account_no'] ?? '');
+            section_end();
+            section('🚛 Delivery', 'sec-delivery');
             echo combo('delivery_person_id', 'deliveries', 'Delivery person', '', false, 'Search driver…');
+            echo inp('delivery_rent_cost', 'Delivery rent (Rs)', $record['delivery_rent_cost'] ?? 0, 'number');
             section_end();
             section('📝 Notes', 'sec-notes');
             echo area('notes', 'Notes', $record['notes'] ?? '', 'span-3');
@@ -1484,9 +1532,10 @@ elseif ($key === 'bookings'):
             } else {
                 existing_items_table(item_rows('booking_items', 'booking_id', $edit), ['material_name' => 'Material', 'qty_booked' => 'Booked', 'qty_dispatched' => 'Dispatched', 'rate' => 'Rate', 'amount' => 'Amount']);
             }
-            section('💳 Payment', 'sec-payment');
+            section('💳 Payment & Adjustments', 'sec-payment');
             echo inp('paid_amount', 'Amount received now', $record['paid_amount'] ?? 0, 'number');
             echo combo('receive_in_account_id', 'accounts', 'Receive in account', $record['receive_in_account_id'] ?? '', false, 'Search account…');
+            echo inp('discount', 'Discount', $record['discount'] ?? 0, 'number');
             echo inp('discount_reason', 'Discount reason', $record['discount_reason'] ?? '');
             section_end();
             section('📝 Notes', 'sec-notes');
