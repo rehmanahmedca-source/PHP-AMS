@@ -3,6 +3,8 @@ declare(strict_types=1);
 session_start();
 
 const DB_FILE = __DIR__ . '/data/ahmed_cement.db';
+const APP_NAME = 'Ahmed Cement ERP';
+const APP_TAGLINE = 'Cement · Steel · Building Material';
 
 function db(): PDO {
     static $pdo;
@@ -25,6 +27,12 @@ function check_csrf(): void {
 function money($n): string { return 'Rs ' . number_format((float)$n, 2); }
 function minor($n): int { return (int)round(((float)$n) * 100); }
 function num($v): float { return (float)str_replace(',', '', (string)($v ?? 0)); }
+function post(string $k, $default = null) { return $_POST[$k] ?? $default; }
+function post_date(string $k, string $time = ''): string {
+    $d = (string)($_POST[$k] ?? '');
+    if ($d === '') $d = date('Y-m-d');
+    return strlen($d) === 10 ? $d . $time : $d;
+}
 function flash(string $type, string $msg): void { $_SESSION['flash'] = [$type, $msg]; }
 function redirect(string $url): never { header('Location: ' . $url); exit; }
 function uid(): ?int { return isset($_SESSION['user']['id']) ? (int)$_SESSION['user']['id'] : null; }
@@ -79,31 +87,156 @@ function badge(string $v): string {
 }
 
 $modules = [
-    'dashboard' => ['label' => 'Dashboard', 'icon' => '⌂', 'group' => ''],
-    'sales' => ['label' => 'Sales', 'icon' => '▣', 'group' => 'OPERATIONS'],
-    'bookings' => ['label' => 'Bookings', 'icon' => '◫', 'group' => 'OPERATIONS'],
-    'purchases' => ['label' => 'Purchases / GRN', 'icon' => '▤', 'group' => 'OPERATIONS'],
-    'payments' => ['label' => 'Payments', 'icon' => '↔', 'group' => 'OPERATIONS'],
-    'returns' => ['label' => 'Returns', 'icon' => '↩', 'group' => 'OPERATIONS'],
-    'pending_bills' => ['label' => 'Pending Bills', 'icon' => '◷', 'group' => 'OPERATIONS'],
-    'materials' => ['label' => 'Materials & Stock', 'icon' => '▥', 'group' => 'MASTERS'],
-    'clients' => ['label' => 'Clients', 'icon' => '◎', 'group' => 'MASTERS'],
-    'suppliers' => ['label' => 'Suppliers', 'icon' => '◇', 'group' => 'MASTERS'],
-    'delivery_persons' => ['label' => 'Delivery Team', 'icon' => '♧', 'group' => 'MASTERS'],
-    'accounts' => ['label' => 'Accounts', 'icon' => '◉', 'group' => 'MASTERS'],
-    'reports' => ['label' => 'Reports', 'icon' => '▤', 'group' => 'INSIGHTS'],
-    'users' => ['label' => 'Users & Roles', 'icon' => '♙', 'group' => 'ADMINISTRATION'],
-    'settings' => ['label' => 'Settings', 'icon' => '⚙', 'group' => 'ADMINISTRATION'],
-    'audit_log' => ['label' => 'Audit Trail', 'icon' => '◌', 'group' => 'ADMINISTRATION'],
+    'dashboard'       => ['label' => 'Dashboard',        'icon' => '📊', 'group' => ''],
+    'sales'           => ['label' => 'Sales',            'icon' => '🧾', 'group' => 'TRANSACTIONS'],
+    'bookings'        => ['label' => 'Bookings',         'icon' => '🗓️', 'group' => 'TRANSACTIONS'],
+    'purchases'       => ['label' => 'Purchases / GRN',  'icon' => '🚚', 'group' => 'TRANSACTIONS'],
+    'payments'        => ['label' => 'Payments',         'icon' => '💸', 'group' => 'TRANSACTIONS'],
+    'returns'         => ['label' => 'Returns',          'icon' => '↩️', 'group' => 'TRANSACTIONS'],
+    'pending_bills'   => ['label' => 'Pending Bills',    'icon' => '⏳', 'group' => 'TRANSACTIONS'],
+    'materials'       => ['label' => 'Stock Summary',    'icon' => '📦', 'group' => 'INVENTORY'],
+    'accounts'        => ['label' => 'Accounts',         'icon' => '🏦', 'group' => 'MONEY'],
+    'clients'         => ['label' => 'Client Ledger',    'icon' => '👥', 'group' => 'LEDGERS'],
+    'suppliers'       => ['label' => 'Supplier Ledger',  'icon' => '🏭', 'group' => 'LEDGERS'],
+    'delivery_persons'=> ['label' => 'Delivery Team',    'icon' => '🚛', 'group' => 'LEDGERS'],
+    'reports'         => ['label' => 'Daily Breakdown',  'icon' => '📈', 'group' => 'INSIGHTS'],
+    'audit_log'       => ['label' => 'Audit Trail',      'icon' => '🛡️', 'group' => 'INSIGHTS'],
+    'users'           => ['label' => 'Users & Roles',    'icon' => '♟️', 'group' => 'ADMINISTRATION'],
+    'settings'        => ['label' => 'Settings',         'icon' => '⚙️', 'group' => 'ADMINISTRATION'],
 ];
 $key = $_GET['module'] ?? 'dashboard';
 if (!isset($modules[$key])) $key = 'dashboard';
 
-if (!isset($_SESSION['user'])) {
-    $u = db()->query("SELECT u.*, r.name role_name, r.is_admin_role FROM users u JOIN roles r ON r.id=u.role_id WHERE u.active=1 ORDER BY u.id LIMIT 1")->fetch();
-    if ($u) $_SESSION['user'] = $u;
+function login_user(array $u): void {
+    session_regenerate_id(true);
+    // Fresh CSRF token tied to the new session id after regeneration.
+    $_SESSION = [];
+    $_SESSION['user'] = $u;
+    $_SESSION['user_agent'] = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    $_SESSION['ip'] = $_SERVER['REMOTE_ADDR'] ?? '';
+    csrf(); // seed a fresh token
+    db()->prepare('UPDATE users SET last_login_at = datetime(\'now\') WHERE id = ?')->execute([$u['id']]);
+    db()->prepare('INSERT INTO user_login_sessions (sid, user_id, username, role_name, ip, user_agent, last_seen_at)
+        VALUES (?,?,?,?,?,?, datetime(\'now\'))
+        ON CONFLICT(sid) DO UPDATE SET last_seen_at = datetime(\'now\'), ended_at = NULL')
+        ->execute([session_id(), $u['id'], $u['username'], $u['role_name'], $_SERVER['REMOTE_ADDR'] ?? '', $_SERVER['HTTP_USER_AGENT'] ?? '']);
+    audit('login', 'User ' . $u['username'] . ' signed in');
 }
-if (isset($_GET['logout'])) { session_destroy(); redirect('?'); }
+
+function render_login(string $error = ''): never {
+    $company = setting('company_name') ?: APP_NAME;
+    $csrf = csrf();
+    http_response_code($error ? 401 : 200);
+    if ($error && !isset($_SESSION['flash'])) flash('error', $error);
+    ?>
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Login · AMS SYSTEM</title>
+<link rel="stylesheet" href="style.css">
+</head><body class="login-body">
+<div class="login-card">
+  <span class="login-top">☀️ Light</span>
+  <div class="login-brand">
+    <div class="brand-word">AMS <span class="accent">SYSTEM</span></div>
+    <span class="tag">FOR EASE ACCESS</span>
+  </div>
+  <?php if (!empty($_SESSION['flash'])): [$ft, $fm] = $_SESSION['flash']; unset($_SESSION['flash']); ?>
+    <div class="flash <?= h($ft) ?>" style="margin:4px 0 18px"><?= h($fm) ?></div>
+  <?php else: ?>
+    <div class="flash error" style="margin:4px 0 18px; background:#fee2e2; border-color:#fecaca; color:#991b1b;">Please log in to access this page.</div>
+  <?php endif; ?>
+  <form method="post" autocomplete="on" id="login-form">
+    <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+    <input type="hidden" name="action" value="login">
+    <label class="field">Username
+      <span class="input-ico">👤</span>
+      <input type="text" name="username" required autofocus autocomplete="username" placeholder="Enter username" value="<?= h($_POST['username'] ?? '') ?>">
+    </label>
+    <label class="field">Password
+      <span class="input-ico">🔒</span>
+      <input type="password" name="password" id="password" required autocomplete="current-password" placeholder="Enter password">
+    </label>
+    <div class="login-options">
+      <label><input type="checkbox" id="show-pw"> Show password</label>
+      <label><input type="checkbox" name="remember" value="1"> Remember me</label>
+    </div>
+    <button class="button primary block" type="submit">🔐 Secure Login</button>
+  </form>
+  <div class="login-foot">© <?= date('Y') ?> AMS SYSTEM FOR EASE</div>
+</div>
+<script>
+document.getElementById('show-pw')?.addEventListener('change', function(){
+  var p=document.getElementById('password'); p.type=this.checked?'text':'password';
+});
+</script>
+</body></html><?php
+    exit;
+}
+
+function do_logout(): never {
+    if (!empty($_SESSION['user']['id'])) {
+        db()->prepare('UPDATE user_login_sessions SET ended_at = datetime(\'now\') WHERE sid = ?')->execute([session_id()]);
+        audit('logout', 'User ' . ($_SESSION['user']['username'] ?? '?') . ' signed out');
+    }
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $p = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $p['path'], $p['domain'], $p['secure'], $p['httponly']);
+    }
+    session_destroy();
+    redirect('?');
+}
+
+if (isset($_GET['logout'])) { do_logout(); }
+
+/* Handle login POST before any output */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'login') {
+    check_csrf();
+    $username = trim((string)($_POST['username'] ?? ''));
+    $password = (string)($_POST['password'] ?? '');
+    $st = db()->prepare("SELECT u.*, r.name role_name, r.is_admin_role
+        FROM users u JOIN roles r ON r.id = u.role_id
+        WHERE u.username = ? AND u.active = 1");
+    $st->execute([$username]);
+    $u = $st->fetch() ?: null;
+    // Check hash; also tolerate the seeded scrypt hashes that were generated
+    // against the documented default via password_verify (works for both bcrypt/scrypt).
+    $ok = $u && (
+        password_verify($password, $u['password_hash'] ?? '')
+        || (isset($u['password_plain']) && hash_equals((string)$u['password_plain'], $password))
+    );
+    if (!$ok) {
+        audit('login_failed', 'Failed sign-in for username "' . $username . '"');
+        render_login('Invalid username or password.');
+    }
+    if (str_starts_with($u['password_hash'] ?? '', 'scrypt:')) {
+        // Upgrade to bcrypt on first successful login (faster to verify on every request).
+        $newHash = password_hash($password, PASSWORD_BCRYPT);
+        db()->prepare('UPDATE users SET password_hash = ? WHERE id = ?')->execute([$newHash, $u['id']]);
+        $u['password_hash'] = $newHash;
+    }
+    if (!empty($_POST['remember'])) {
+        $lifetime = 60 * 60 * 24 * 30;
+        session_set_cookie_params(['lifetime' => $lifetime, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax']);
+    }
+    login_user($u);
+    flash('success', 'Welcome, ' . $u['full_name'] . '.');
+    redirect('?module=dashboard');
+}
+
+if (!isset($_SESSION['user'])) {
+    render_login();
+}
+
+// Basic session fixation / hijack guard
+if (($_SESSION['user_agent'] ?? null) !== null && ($_SERVER['HTTP_USER_AGENT'] ?? '') !== $_SESSION['user_agent']) {
+    do_logout();
+}
+// Touch last_seen every few minutes
+if (!isset($_SESSION['last_seen']) || time() - (int)$_SESSION['last_seen'] > 300) {
+    $_SESSION['last_seen'] = time();
+    db()->prepare('UPDATE user_login_sessions SET last_seen_at = datetime(\'now\') WHERE sid = ?')->execute([session_id()]);
+}
 
 /* ---------------- Lookups for searchable lists ---------------- */
 function lookups(): array {
@@ -211,6 +344,51 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             flash('success', 'Bill marked as paid.');
             redirect('?module=pending_bills');
         }
+        if ($action === 'transfer') {
+            $from = (int)($_POST['from_account_id'] ?? 0);
+            $to = (int)($_POST['to_account_id'] ?? 0);
+            $amt = num($_POST['amount'] ?? 0);
+            if (!$from || !$to) throw new RuntimeException('Choose both accounts.');
+            if ($from === $to) throw new RuntimeException('From and To accounts must differ.');
+            if ($amt <= 0) throw new RuntimeException('Amount must be greater than zero.');
+            $fa = db()->prepare('SELECT * FROM accounts WHERE id=?'); $fa->execute([$from]); $fa = $fa->fetch();
+            $ta = db()->prepare('SELECT * FROM accounts WHERE id=?'); $ta->execute([$to]); $ta = $ta->fetch();
+            if (!$fa || !$ta) throw new RuntimeException('Account not found.');
+            $date = post_date('transfer_date', ' ' . date('H:i:s'));
+            db()->beginTransaction();
+            db()->prepare("INSERT INTO account_transfers (transfer_date,from_account_id,to_account_id,amount,amount_minor,reference,description,notes,created_by) VALUES (?,?,?,?,?,?,?,?,?)")
+                ->execute([$date, $from, $to, $amt, minor($amt), post('reference'), post('description'), post('notes'), uid()]);
+            db()->prepare("UPDATE accounts SET balance=balance-?, balance_minor=CAST(ROUND((balance-?)*100) AS INTEGER) WHERE id=?")->execute([$amt, $amt, $from]);
+            db()->prepare("UPDATE accounts SET balance=balance+?, balance_minor=CAST(ROUND((balance+?)*100) AS INTEGER) WHERE id=?")->execute([$amt, $amt, $to]);
+            audit('create', "Transfer ".money($amt)." from {$fa['name']} to {$ta['name']}");
+            db()->commit();
+            flash('success', 'Transfer recorded.');
+            redirect('?module=accounts&view=transfers');
+        }
+        if ($action === 'reconcile') {
+            $acct = (int)($_POST['account_id'] ?? 0);
+            $actual = num($_POST['actual_balance'] ?? 0);
+            $from = $_POST['period_start'] ?? date('Y-m-d', strtotime('-30 days'));
+            $to = $_POST['period_end'] ?? date('Y-m-d');
+            if (!$acct) throw new RuntimeException('Choose an account.');
+            $a = db()->prepare('SELECT * FROM accounts WHERE id=?'); $a->execute([$acct]); $a = $a->fetch();
+            if (!$a) throw new RuntimeException('Account not found.');
+            $tin = scalar("SELECT COALESCE(SUM(amount),0) FROM payments WHERE payment_account_id=? AND direction='in' AND date(payment_date) BETWEEN ? AND ?", [$acct, $from, $to]);
+            $tout = scalar("SELECT COALESCE(SUM(amount),0) FROM payments WHERE payment_account_id=? AND direction='out' AND date(payment_date) BETWEEN ? AND ?", [$acct, $from, $to]);
+            $opening = (float)$a['opening_balance'];
+            $expected = $opening + $tin - $tout;
+            $diff = $actual - $expected;
+            $dtype = abs($diff) < 0.01 ? 'none' : ($diff > 0 ? 'over' : 'short');
+            db()->prepare("INSERT INTO account_reconciliations (account_id,reconciliation_date,period_start_at,period_end_at,opening_balance,opening_balance_minor,transaction_in,transaction_in_minor,transaction_out,transaction_out_minor,transaction_net,transaction_net_minor,expected_balance,expected_balance_minor,actual_balance,actual_balance_minor,difference,difference_minor,final_reconciled_balance,final_reconciled_balance_minor,difference_type,status,notes,created_by_id,created_by,created_ip) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
+                ->execute([$acct, date('Y-m-d H:i:s'), $from, $to,
+                    $opening, minor($opening), $tin, minor($tin), $tout, minor($tout), $tin-$tout, minor($tin-$tout),
+                    $expected, minor($expected), $actual, minor($actual), $diff, minor($diff), $actual, minor($actual),
+                    $dtype, 'confirmed', post('notes'), uid(), $_SESSION['user']['username'] ?? 'system', $_SERVER['REMOTE_ADDR'] ?? '']);
+            db()->prepare("UPDATE accounts SET balance=?, balance_minor=? WHERE id=?")->execute([$actual, minor($actual), $acct]);
+            audit('create', "Reconciliation for {$a['name']}: expected ".money($expected).", actual ".money($actual));
+            flash('success', 'Reconciliation saved.');
+            redirect('?module=accounts&view=reconciliations');
+        }
     } catch (Throwable $e) {
         flash('error', 'Could not save: ' . $e->getMessage());
         $back = '?module=' . $key;
@@ -231,10 +409,9 @@ function save_sale(): never {
     if (!in_array($saleType, ['cash', 'credit', 'booking', 'booking_credit'], true)) throw new RuntimeException('Invalid sale type.');
     $bookingId = in_array($saleType, ['booking', 'booking_credit'], true) ? (int)($_POST['booking_id'] ?? 0) : 0;
     if (in_array($saleType, ['booking', 'booking_credit'], true) && !$bookingId) throw new RuntimeException('Select the booking being dispatched.');
-    $date = $_POST['sale_date'] ?: date('Y-m-d');
-    if (strlen($date) === 10) $date .= ' ' . date('H:i:s');
+    $date = post_date('sale_date', ' ' . date('H:i:s'));
     $discount = max(0, num($_POST['discount'] ?? 0));
-    $payMethod = $_POST['payment_method'] ?: ($saleType === 'credit' ? 'credit' : 'cash');
+    $payMethod = post('payment_method') ?: ($saleType === 'credit' ? 'credit' : 'cash');
     if (!in_array($payMethod, ['cash', 'bank', 'credit'], true)) $payMethod = 'cash';
     $accountId = (int)($_POST['payment_account_id'] ?? 0) ?: null;
     $manual = trim((string)($_POST['manual_bill_no'] ?? ''));
@@ -251,7 +428,7 @@ function save_sale(): never {
         db()->beginTransaction();
         db()->prepare("INSERT INTO sales (auto_bill_no,manual_bill_no,client_id,sale_date,sale_type,booking_id,subtotal,subtotal_minor,discount,discount_minor,discount_reason,tax_amount,total_amount,total_amount_minor,total_paid_cache,total_paid_cache_minor,payment_method,payment_account_id,status,revision,created_by,notes)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?, 'active',0,?,?)")
-            ->execute([$auto, $manual, $clientId, $date, $saleType, $bookingId ?: null, $subtotal, minor($subtotal), $discount, minor($discount), $_POST['discount_reason'] ?: null, $total, minor($total), $paid, minor($paid), $payMethod, $accountId, uid(), $_POST['notes'] ?: null]);
+            ->execute([$auto, $manual, $clientId, $date, $saleType, $bookingId ?: null, $subtotal, minor($subtotal), $discount, minor($discount), post('discount_reason') ?: null, $total, minor($total), $paid, minor($paid), $payMethod, $accountId, uid(), post('notes') ?: null]);
         $newId = (int)db()->lastInsertId();
         $ins = db()->prepare("INSERT INTO sale_items (sale_id,material_id,qty,rate,rate_minor,amount,amount_minor) VALUES (?,?,?,?,?,?,?)");
         foreach ($items as $it) {
@@ -273,7 +450,7 @@ function save_sale(): never {
     }
 
     db()->prepare("UPDATE sales SET client_id=?, sale_date=?, sale_type=?, booking_id=?, manual_bill_no=?, discount=?, discount_minor=?, discount_reason=?, payment_method=?, payment_account_id=?, notes=?, updated_by=? WHERE id=?")
-        ->execute([$clientId, $date, $saleType, $bookingId ?: null, $manual !== '' ? $manual : 'MB', $discount, minor($discount), $_POST['discount_reason'] ?: null, $payMethod, $accountId, $_POST['notes'] ?: null, uid(), $id]);
+        ->execute([$clientId, $date, $saleType, $bookingId ?: null, $manual !== '' ? $manual : 'MB', $discount, minor($discount), post('discount_reason') ?: null, $payMethod, $accountId, post('notes') ?: null, uid(), $id]);
     $row = db()->prepare('SELECT subtotal FROM sales WHERE id=?');
     $row->execute([$id]);
     $subtotal = (float)$row->fetchColumn();
@@ -288,8 +465,7 @@ function save_booking(): never {
     $id = (int)($_POST['id'] ?? 0);
     $clientId = (int)($_POST['client_id'] ?? 0);
     require_client($clientId);
-    $date = $_POST['booking_date'] ?: date('Y-m-d');
-    if (strlen($date) === 10) $date .= ' ' . date('H:i:s');
+    $date = post_date('booking_date', ' ' . date('H:i:s'));
     $discount = max(0, num($_POST['discount'] ?? 0));
     $paid = max(0, num($_POST['paid_amount'] ?? 0));
     $accountId = (int)($_POST['receive_in_account_id'] ?? 0) ?: null;
@@ -306,7 +482,7 @@ function save_booking(): never {
         db()->beginTransaction();
         db()->prepare("INSERT INTO bookings (auto_bill_no,manual_bill_no,client_id,booking_date,total_amount,total_amount_minor,paid_amount,paid_amount_minor,discount,discount_reason,receive_in_account_id,status,created_by,notes)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,?)")
-            ->execute([$auto, $manual, $clientId, $date, $total, minor($total), $paid, minor($paid), $discount, $_POST['discount_reason'] ?: null, $accountId, uid(), $_POST['notes'] ?: null]);
+            ->execute([$auto, $manual, $clientId, $date, $total, minor($total), $paid, minor($paid), $discount, post('discount_reason') ?: null, $accountId, uid(), post('notes') ?: null]);
         $newId = (int)db()->lastInsertId();
         $ins = db()->prepare("INSERT INTO booking_items (booking_id,material_id,qty_booked,rate,rate_minor,amount,amount_minor) VALUES (?,?,?,?,?,?,?)");
         foreach ($items as $it) {
@@ -324,7 +500,7 @@ function save_booking(): never {
     }
 
     db()->prepare("UPDATE bookings SET client_id=?, booking_date=?, manual_bill_no=?, discount=?, discount_reason=?, receive_in_account_id=?, notes=?, updated_by=? WHERE id=?")
-        ->execute([$clientId, $date, $manual !== '' ? $manual : 'MB', $discount, $_POST['discount_reason'] ?: null, $accountId, $_POST['notes'] ?: null, uid(), $id]);
+        ->execute([$clientId, $date, $manual !== '' ? $manual : 'MB', $discount, post('discount_reason') ?: null, $accountId, post('notes') ?: null, uid(), $id]);
     flash('success', 'Booking updated.');
     redirect('?module=bookings&view=' . $id);
 }
@@ -333,15 +509,15 @@ function save_purchase(): never {
     $id = (int)($_POST['id'] ?? 0);
     $supplierId = (int)($_POST['supplier_id'] ?? 0);
     require_supplier($supplierId);
-    $date = $_POST['purchase_date'] ?: date('Y-m-d');
-    if (strlen($date) === 10) $date .= ' 00:00:00';
-    $billDate = $_POST['bill_date'] ?: $date;
-    $due = $_POST['due_date'] ?: null;
+    $date = post_date('purchase_date', ' 00:00:00');
+    $billDate = post('bill_date') ?: $date;
+    if (strlen((string)$billDate) === 10) $billDate .= ' 00:00:00';
+    $due = post('due_date') ?: null;
     $loading = max(0, num($_POST['loading_cost'] ?? 0));
     $freight = max(0, num($_POST['freight_cost'] ?? 0));
     $other = max(0, num($_POST['other_expense'] ?? 0));
     $discount = max(0, num($_POST['discount'] ?? 0));
-    $payType = $_POST['payment_type'] ?: 'credit';
+    $payType = post('payment_type') ?: 'credit';
     if (!in_array($payType, ['cash', 'bank', 'credit'], true)) $payType = 'credit';
     $accountId = (int)($_POST['payment_account_id'] ?? 0) ?: null;
     $manual = trim((string)($_POST['manual_bill_no'] ?? ''));
@@ -357,7 +533,7 @@ function save_purchase(): never {
         db()->beginTransaction();
         db()->prepare("INSERT INTO purchases (auto_bill_no,manual_bill_no,supplier_id,supplier_invoice_no,bill_date,purchase_date,due_date,subtotal,subtotal_minor,loading_cost,freight_cost,other_expense,discount,total_amount,total_amount_minor,paid_amount,paid_amount_minor,payment_type,payment_account_id,status,revision,created_by,notes)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?, 'active',0,?,?)")
-            ->execute([$auto, $manual, $supplierId, $_POST['supplier_invoice_no'] ?: null, $billDate, $date, $due, $subtotal, minor($subtotal), $loading, $freight, $other, $discount, $total, minor($total), $payType, $accountId, uid(), $_POST['notes'] ?: null]);
+            ->execute([$auto, $manual, $supplierId, post('supplier_invoice_no') ?: null, $billDate, $date, $due, $subtotal, minor($subtotal), $loading, $freight, $other, $discount, $total, minor($total), $payType, $accountId, uid(), post('notes') ?: null]);
         $newId = (int)db()->lastInsertId();
         $ins = db()->prepare("INSERT INTO purchase_items (purchase_id,material_id,qty,rate,rate_minor,amount,amount_minor) VALUES (?,?,?,?,?,?,?)");
         foreach ($items as $it) {
@@ -374,7 +550,7 @@ function save_purchase(): never {
     }
 
     db()->prepare("UPDATE purchases SET supplier_id=?, supplier_invoice_no=?, bill_date=?, purchase_date=?, due_date=?, loading_cost=?, freight_cost=?, other_expense=?, discount=?, payment_type=?, payment_account_id=?, notes=?, updated_by=? WHERE id=?")
-        ->execute([$supplierId, $_POST['supplier_invoice_no'] ?: null, $billDate, $date, $due, $loading, $freight, $other, $discount, $payType, $accountId, $_POST['notes'] ?: null, uid(), $id]);
+        ->execute([$supplierId, post('supplier_invoice_no') ?: null, $billDate, $date, $due, $loading, $freight, $other, $discount, $payType, $accountId, post('notes') ?: null, uid(), $id]);
     flash('success', 'Purchase updated.');
     redirect('?module=purchases&view=' . $id);
 }
@@ -405,8 +581,7 @@ function save_payment(): never {
             default => $direction === 'in' ? 'sale' : 'other',
         };
     }
-    $date = $_POST['payment_date'] ?: date('Y-m-d');
-    if (strlen($date) === 10) $date .= ' ' . date('H:i:s');
+    $date = post_date('payment_date', ' ' . date('H:i:s'));
     $discount = max(0, num($_POST['discount'] ?? 0));
     $manual = trim((string)($_POST['manual_bill_no'] ?? ''));
     $snapshot = party_name($partyType, (int)$partyId) ?: ($_POST['party_name_snapshot'] ?? null);
@@ -422,14 +597,14 @@ function save_payment(): never {
         if ($manual === '') $manual = $auto;
         db()->prepare("INSERT INTO payments (auto_bill_no,manual_bill_no,payment_date,direction,party_type,party_id,party_name_snapshot,amount,amount_minor,discount,discount_minor,discount_reason,payment_mode,payment_account_id,account_name,reference,reference_type,created_by,notes)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            ->execute([$auto, $manual, $date, $direction, $partyType, $partyId, $snapshot, $amount, minor($amount), $discount, minor($discount), $_POST['discount_reason'] ?: null, $mode, $accountId, $accName, $_POST['reference'] ?: null, $refType, uid(), $_POST['notes'] ?: null]);
+            ->execute([$auto, $manual, $date, $direction, $partyType, $partyId, $snapshot, $amount, minor($amount), $discount, minor($discount), post('discount_reason') ?: null, $mode, $accountId, $accName, post('reference') ?: null, $refType, uid(), post('notes') ?: null]);
         audit('create', "Payment $auto $direction $amount");
         flash('success', "Payment $auto recorded.");
         redirect('?module=payments');
     }
 
     db()->prepare("UPDATE payments SET payment_date=?, direction=?, party_type=?, party_id=?, party_name_snapshot=?, amount=?, amount_minor=?, discount=?, discount_minor=?, payment_mode=?, payment_account_id=?, account_name=?, reference=?, reference_type=?, notes=?, updated_by=? WHERE id=?")
-        ->execute([$date, $direction, $partyType, $partyId, $snapshot, $amount, minor($amount), $discount, minor($discount), $mode, $accountId, $accName, $_POST['reference'] ?: null, $refType, $_POST['notes'] ?: null, uid(), $id]);
+        ->execute([$date, $direction, $partyType, $partyId, $snapshot, $amount, minor($amount), $discount, minor($discount), $mode, $accountId, $accName, post('reference') ?: null, $refType, post('notes') ?: null, uid(), $id]);
     flash('success', 'Payment updated.');
     redirect('?module=payments');
 }
@@ -449,8 +624,7 @@ function save_return(): never {
     if ($type === 'booking_return' && !$bookingItem) throw new RuntimeException('Booking returns need a booking item.');
     $refundReq = $type === 'cash_sale_return' && !empty($_POST['refund_required']) ? 1 : 0;
     $refundStatus = $refundReq ? (($_POST['refund_status'] ?? 'pending') === 'paid' ? 'paid' : 'pending') : 'not_applicable';
-    $date = $_POST['return_date'] ?: date('Y-m-d');
-    if (strlen($date) === 10) $date .= ' ' . date('H:i:s');
+    $date = post_date('return_date', ' ' . date('H:i:s'));
     $amt = $qty * $rate;
     $manual = trim((string)($_POST['manual_bill_no'] ?? ''));
 
@@ -459,13 +633,13 @@ function save_return(): never {
         if ($manual === '') $manual = $auto;
         db()->prepare("INSERT INTO returns (auto_bill_no,manual_bill_no,return_type,client_id,material_id,qty,rate,rate_minor,amount,amount_minor,refund_required,refund_status,return_date,booking_item_id,created_by,notes)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            ->execute([$auto, $manual, $type, $clientId, $materialId, $qty, $rate, minor($rate), $amt, minor($amt), $refundReq, $refundStatus, $date, $bookingItem, uid(), $_POST['notes'] ?: null]);
+            ->execute([$auto, $manual, $type, $clientId, $materialId, $qty, $rate, minor($rate), $amt, minor($amt), $refundReq, $refundStatus, $date, $bookingItem, uid(), post('notes') ?: null]);
         audit('create', "Return $auto");
         flash('success', "Return $auto saved.");
         redirect('?module=returns');
     }
     db()->prepare("UPDATE returns SET return_type=?, client_id=?, material_id=?, qty=?, rate=?, rate_minor=?, amount=?, amount_minor=?, refund_required=?, refund_status=?, return_date=?, notes=? WHERE id=?")
-        ->execute([$type, $clientId, $materialId, $qty, $rate, minor($rate), $amt, minor($amt), $refundReq, $refundStatus, $date, $_POST['notes'] ?: null, $id]);
+        ->execute([$type, $clientId, $materialId, $qty, $rate, minor($rate), $amt, minor($amt), $refundReq, $refundStatus, $date, post('notes') ?: null, $id]);
     flash('success', 'Return updated.');
     redirect('?module=returns');
 }
@@ -482,11 +656,11 @@ function save_pending_bill(): never {
     if (!$id) {
         db()->prepare("INSERT INTO pending_bills (client_id,client_name_snapshot,bill_no,bill_kind,transaction_type,amount,amount_minor,reason,is_paid,is_cash,notes,created_by)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-            ->execute([$clientId, $name, $_POST['bill_no'] ?: null, $kind, $_POST['transaction_type'] ?: null, $amount, minor($amount), $_POST['reason'] ?: null, $paid, $cash, $_POST['notes'] ?: null, uid()]);
+            ->execute([$clientId, $name, post('bill_no') ?: null, $kind, post('transaction_type') ?: null, $amount, minor($amount), post('reason') ?: null, $paid, $cash, post('notes') ?: null, uid()]);
         flash('success', 'Pending bill created.');
     } else {
         db()->prepare("UPDATE pending_bills SET client_id=?, client_name_snapshot=?, bill_no=?, bill_kind=?, transaction_type=?, amount=?, amount_minor=?, reason=?, is_paid=?, is_cash=?, notes=? WHERE id=?")
-            ->execute([$clientId, $name, $_POST['bill_no'] ?: null, $kind, $_POST['transaction_type'] ?: null, $amount, minor($amount), $_POST['reason'] ?: null, $paid, $cash, $_POST['notes'] ?: null, $id]);
+            ->execute([$clientId, $name, post('bill_no') ?: null, $kind, post('transaction_type') ?: null, $amount, minor($amount), post('reason') ?: null, $paid, $cash, post('notes') ?: null, $id]);
         flash('success', 'Pending bill updated.');
     }
     redirect('?module=pending_bills');
@@ -530,10 +704,10 @@ function save_client(): never {
     $active = isset($_POST['active']) ? 1 : 0;
     if (!$id) $active = 1;
     $fields = [
-        $code, $name, $_POST['phone'] ?: null, $_POST['cnic'] ?: null, $_POST['address'] ?: null, $_POST['location_url'] ?: null,
-        $cat, $type, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $_POST['book_no'] ?: null,
-        $_POST['financial_book_no'] ?: null, $_POST['financial_page'] ?: null, $_POST['cement_book_no'] ?: null, $_POST['cement_page'] ?: null,
-        $_POST['steel_book_no'] ?: null, $_POST['steel_page'] ?: null, $_POST['page_notes'] ?: null,
+        $code, $name, post('phone') ?: null, post('cnic') ?: null, post('address') ?: null, post('location_url') ?: null,
+        $cat, $type, $ob, minor($ob), post('opening_balance_date') ?: null, post('book_no') ?: null,
+        post('financial_book_no') ?: null, post('financial_page') ?: null, post('cement_book_no') ?: null, post('cement_page') ?: null,
+        post('steel_book_no') ?: null, post('steel_page') ?: null, post('page_notes') ?: null,
         !empty($_POST['require_manual_invoice']) ? 1 : 0, $active,
     ];
     if (!$id) {
@@ -562,11 +736,11 @@ function save_supplier(): never {
     if (!$id) {
         db()->prepare("INSERT INTO suppliers (code,name,phone,address,category_id,opening_balance,opening_balance_minor,opening_balance_date,active,created_by)
             VALUES (?,?,?,?,?,?,?,?,?,?)")
-            ->execute([$code, $name, $_POST['phone'] ?: null, $_POST['address'] ?: null, $cat, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $active, uid()]);
+            ->execute([$code, $name, post('phone') ?: null, post('address') ?: null, $cat, $ob, minor($ob), post('opening_balance_date') ?: null, $active, uid()]);
         flash('success', 'Supplier created.');
     } else {
         db()->prepare("UPDATE suppliers SET code=?, name=?, phone=?, address=?, category_id=?, opening_balance=?, opening_balance_minor=?, opening_balance_date=?, active=? WHERE id=?")
-            ->execute([$code, $name, $_POST['phone'] ?: null, $_POST['address'] ?: null, $cat, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $active, $id]);
+            ->execute([$code, $name, post('phone') ?: null, post('address') ?: null, $cat, $ob, minor($ob), post('opening_balance_date') ?: null, $active, $id]);
         flash('success', 'Supplier updated.');
     }
     redirect('?module=suppliers');
@@ -586,11 +760,11 @@ function save_delivery(): never {
     if (!$id) {
         db()->prepare("INSERT INTO delivery_persons (code,name,phone,linked_user_id,rate_per_trip,opening_balance,opening_balance_minor,opening_balance_date,active)
             VALUES (?,?,?,?,?,?,?,?,?)")
-            ->execute([$code, $name, $_POST['phone'] ?: null, $user, $rate, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $active]);
+            ->execute([$code, $name, post('phone') ?: null, $user, $rate, $ob, minor($ob), post('opening_balance_date') ?: null, $active]);
         flash('success', 'Delivery person created.');
     } else {
         db()->prepare("UPDATE delivery_persons SET code=?, name=?, phone=?, linked_user_id=?, rate_per_trip=?, opening_balance=?, opening_balance_minor=?, opening_balance_date=?, active=? WHERE id=?")
-            ->execute([$code, $name, $_POST['phone'] ?: null, $user, $rate, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $active, $id]);
+            ->execute([$code, $name, post('phone') ?: null, $user, $rate, $ob, minor($ob), post('opening_balance_date') ?: null, $active, $id]);
         flash('success', 'Delivery person updated.');
     }
     redirect('?module=delivery_persons');
@@ -602,10 +776,10 @@ function save_account(): never {
     if ($name === '') throw new RuntimeException('Account name is required.');
     $type = $_POST['account_type'] ?? 'other';
     if (!in_array($type, ['cash_drawer', 'bank', 'expense', 'revenue', 'loan', 'owner', 'other'], true)) $type = 'other';
-    $class = $_POST['account_class'] ?: null;
+    $class = post('account_class') ?: null;
     if ($class && !in_array($class, ['asset', 'liability', 'equity', 'income', 'expense'], true)) $class = null;
     $ob = num($_POST['opening_balance'] ?? 0);
-    $bank = $_POST['bank_name'] ?: null;
+    $bank = post('bank_name') ?: null;
     if ($type === 'bank' && !$bank) throw new RuntimeException('Bank accounts need a bank name.');
     $active = isset($_POST['active']) ? 1 : 0;
     if (!$id) $active = 1;
@@ -613,11 +787,11 @@ function save_account(): never {
     if (!$id) {
         db()->prepare("INSERT INTO accounts (name,account_type,account_class,category_id,bank_name,account_holder_name,account_number,branch_code,opening_balance,opening_balance_minor,opening_balance_date,balance,balance_minor,note,active)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            ->execute([$name, $type, $class, $cat, $bank, $_POST['account_holder_name'] ?: null, $_POST['account_number'] ?: null, $_POST['branch_code'] ?: null, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $ob, minor($ob), $_POST['note'] ?: null, $active]);
+            ->execute([$name, $type, $class, $cat, $bank, post('account_holder_name') ?: null, post('account_number') ?: null, post('branch_code') ?: null, $ob, minor($ob), post('opening_balance_date') ?: null, $ob, minor($ob), post('note') ?: null, $active]);
         flash('success', 'Account created.');
     } else {
         db()->prepare("UPDATE accounts SET name=?, account_type=?, account_class=?, category_id=?, bank_name=?, account_holder_name=?, account_number=?, branch_code=?, opening_balance=?, opening_balance_minor=?, opening_balance_date=?, note=?, active=? WHERE id=?")
-            ->execute([$name, $type, $class, $cat, $bank, $_POST['account_holder_name'] ?: null, $_POST['account_number'] ?: null, $_POST['branch_code'] ?: null, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $_POST['note'] ?: null, $active, $id]);
+            ->execute([$name, $type, $class, $cat, $bank, post('account_holder_name') ?: null, post('account_number') ?: null, post('branch_code') ?: null, $ob, minor($ob), post('opening_balance_date') ?: null, post('note') ?: null, $active, $id]);
         flash('success', 'Account updated.');
     }
     redirect('?module=accounts');
@@ -640,11 +814,11 @@ function save_user(): never {
         if ($pass === '') throw new RuntimeException('Password is required for a new user.');
         db()->prepare("INSERT INTO users (username,password_hash,full_name,role_id,phone,email,status,restrict_backdated_edit,active)
             VALUES (?,?,?,?,?,?,?,?,?)")
-            ->execute([$username, password_hash($pass, PASSWORD_DEFAULT), $full, $role, $_POST['phone'] ?: null, $_POST['email'] ?: null, $status, $restrict, $active]);
+            ->execute([$username, password_hash($pass, PASSWORD_DEFAULT), $full, $role, post('phone') ?: null, post('email') ?: null, $status, $restrict, $active]);
         flash('success', 'User created.');
     } else {
         db()->prepare("UPDATE users SET username=?, full_name=?, role_id=?, phone=?, email=?, status=?, restrict_backdated_edit=?, active=? WHERE id=?")
-            ->execute([$username, $full, $role, $_POST['phone'] ?: null, $_POST['email'] ?: null, $status, $restrict, $active, $id]);
+            ->execute([$username, $full, $role, post('phone') ?: null, post('email') ?: null, $status, $restrict, $active, $id]);
         if ($pass !== '') db()->prepare('UPDATE users SET password_hash=? WHERE id=?')->execute([password_hash($pass, PASSWORD_DEFAULT), $id]);
         flash('success', 'User updated.');
     }
@@ -654,9 +828,9 @@ function save_user(): never {
 function save_settings(): never {
     db()->prepare("UPDATE settings SET company_name=?, company_address=?, company_phone=?, company_email=?, currency=?, currency_symbol=?, tax_rate=?, invoice_prefix=?, bill_prefix=?, backdate_grace_days=?, allow_global_negative_stock=?, low_stock_alert_enabled=?, updated_by=? WHERE id=1")
         ->execute([
-            $_POST['company_name'] ?: null, $_POST['company_address'] ?: null, $_POST['company_phone'] ?: null, $_POST['company_email'] ?: null,
-            $_POST['currency'] ?: 'PKR', $_POST['currency_symbol'] ?: 'Rs', num($_POST['tax_rate'] ?? 0),
-            $_POST['invoice_prefix'] ?: 'INV', $_POST['bill_prefix'] ?: 'B', (int)($_POST['backdate_grace_days'] ?? 0),
+            post('company_name') ?: null, post('company_address') ?: null, post('company_phone') ?: null, post('company_email') ?: null,
+            post('currency') ?: 'PKR', post('currency_symbol') ?: 'Rs', num($_POST['tax_rate'] ?? 0),
+            post('invoice_prefix') ?: 'INV', post('bill_prefix') ?: 'B', (int)($_POST['backdate_grace_days'] ?? 0),
             !empty($_POST['allow_global_negative_stock']) ? 1 : 0, !empty($_POST['low_stock_alert_enabled']) ? 1 : 0, uid(),
         ]);
     flash('success', 'Settings saved.');
@@ -851,6 +1025,117 @@ function item_rows(string $table, string $fk, int $id): array {
     return $st->fetchAll();
 }
 
+/* ---------------- UI helpers ---------------- */
+function icon_btn(string $href, string $icon, string $title, string $cls = 'view'): string {
+    return '<a class="act-btn ' . h($cls) . '" href="' . h($href) . '" title="' . h($title) . '" aria-label="' . h($title) . '">' . $icon . '</a>';
+}
+function icon_post(int $id, string $action, string $icon, string $title, string $cls, string $confirm = ''): string {
+    $on = $confirm ? ' onsubmit="return confirm(\'' . h($confirm) . '\')"' : '';
+    return '<span class="act-btn ' . h($cls) . '" title="' . h($title) . '"><form method="post"' . $on . '>'
+        . '<input type="hidden" name="csrf" value="' . h(csrf()) . '">'
+        . '<input type="hidden" name="action" value="' . h($action) . '">'
+        . '<input type="hidden" name="id" value="' . $id . '">'
+        . '<button type="submit" aria-label="' . h($title) . '">' . $icon . '</button></form></span>';
+}
+function action_icons(string $mod, int $id, array $opt = []): string {
+    $s = '<div class="act-icons">';
+    if ($opt['view'] ?? true) $s .= icon_btn("?module=$mod&view=$id", '👁', 'View', 'view');
+    if ($opt['recv'] ?? false) $s .= icon_btn("?module=$mod&view=$id", '⬇️', 'Dispatch / Receive', 'recv');
+    if ($opt['edit'] ?? true) $s .= icon_btn("?module=$mod&edit=$id", '✏️', 'Edit', 'edit');
+    if ($opt['print'] ?? false) $s .= icon_btn("?module=$mod&view=$id", '🖨️', 'Print', 'print');
+    if ($opt['del'] ?? true) {
+        $label = $opt['delLabel'] ?? 'Delete';
+        $s .= icon_post($id, 'delete', '🗑', $label, 'del', "Are you sure? $label this record?");
+    }
+    return $s . '</div>';
+}
+function paginate(int $total, int $perPage, int $page, string $baseUrl): string {
+    $pages = max(1, (int)ceil($total / $perPage));
+    if ($pages < 2) return '';
+    $h = '<div class="pager">';
+    if ($page > 1) $h .= '<a href="' . h($baseUrl . '&page=' . ($page - 1)) . '">← Previous</a>';
+    $h .= '<span class="cur">' . $page . ' / ' . $pages . '</span>';
+    if ($page < $pages) $h .= '<a href="' . h($baseUrl . '&page=' . ($page + 1)) . '">Next →</a>';
+    return $h . '</div>';
+}
+function filter_card_open(): void { echo '<section class="filter-card"><div class="fc-grid">'; }
+function filter_field(string $label, string $html): void { echo '<label>' . h($label) . $html . '</label>'; }
+function filter_card_close(string $primary = 'Apply', bool $reset = true, string $module = ''): void {
+    echo '</div><div class="fc-actions"><button class="button primary" type="submit">▽ ' . h($primary) . '</button>';
+    if ($reset) echo '<a class="button" href="?module=' . h($module ?: ($_GET['module'] ?? '')) . '">Reset</a>';
+    echo '<div class="spacer"></div></div></section>';
+}
+function money_page_hero(string $icon, string $title, string $sub, array $crumbs = [], string $rightBtn = ''): void {
+    $links = array_map(fn($c) => '<a class="button" href="'.$c[1].'">'.$c[0].'</a>', $crumbs);
+    echo '<section class="page-hero money-hero"><div>';
+    echo '<h2>'.$icon.' '.h($title).'</h2><p>'.h($sub).'</p>';
+    echo '</div><div class="hero-actions">'.implode('', $links).$rightBtn.'</div></section>';
+}
+
+/* ---------------- Money / accounts helpers ---------------- */
+function account_channel(array $a): string {
+    $n = strtoupper($a['name'] ?? '');
+    if ($a['account_type'] === 'bank' || ($a['bank_name'] ?? '') || str_contains($n, ' BANK')) return 'bank';
+    if (str_contains($n, 'CASH')) return 'cash';
+    return 'cash';
+}
+function account_group(array $a): string {
+    $n = strtoupper($a['name'] ?? '');
+    if (str_contains($n, 'AJ')) return 'Personal Account';
+    if (str_contains($n, 'FBM')) return 'FBM-JPS';
+    if (str_contains($n, 'HDC')) return 'Company';
+    if (str_contains($n, 'TEST')) return 'cash';
+    return 'company';
+}
+function channel_badge(string $ch): string {
+    return '<span class="badge ' . h($ch) . '">' . strtoupper(h($ch)) . '</span>';
+}
+function group_badge(string $g): string {
+    $cls = strtolower(preg_replace('/[^a-z0-9]+/i','_', $g));
+    return '<span class="badge sub ' . h($cls) . '">' . h($g) . '</span>';
+}
+function date_filter(): array {
+    $from = $_GET['from'] ?? date('Y-m-d', strtotime('-30 days'));
+    $to   = $_GET['to']   ?? date('Y-m-d');
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$from)) $from = date('Y-m-d', strtotime('-30 days'));
+    if (!preg_match('/^\d{4}-\d{2}-\d{2}$/', (string)$to))   $to   = date('Y-m-d');
+    return [$from, $to];
+}
+function kpi_card(string $label, string $value, string $tone, string $meta = '', string $link = '', string $btn = ''): void {
+    $tag = $link ? 'a' : 'div';
+    $href = $link ? ' href="'.h($link).'"' : '';
+    echo '<'.$tag.$href.' class="card tone-'.h($tone).'" style="text-decoration:none;color:inherit;position:relative">';
+    echo '<div class="card-top"><span>'.h($label).'</span><i>◈</i></div>';
+    echo '<strong>'.h($value).'</strong>';
+    if ($meta) echo '<small>'.h($meta).'</small>';
+    if ($btn) echo '<span class="card-link">'.h($btn).'</span>';
+    echo '</'.$tag.'>';
+}
+function money_filter_bar(array $opts): void {
+    [$from, $to] = date_filter();
+    $method = $_GET['method'] ?? 'all';
+    $cat = $_GET['category'] ?? 'all';
+    $q = trim((string)($_GET['q'] ?? ''));
+    echo '<form class="filter-bar" method="get"><input type="hidden" name="module" value="accounts"><input type="hidden" name="view" value="'.h($opts['view'] ?? '').'">';
+    echo '<label>From<input type="date" name="from" value="'.h($from).'"></label>';
+    echo '<label>To<input type="date" name="to" value="'.h($to).'"></label>';
+    if (!empty($opts['methods'])) {
+        echo '<label>Method<select name="method"><option value="all">All</option>';
+        foreach ($opts['methods'] as $k=>$v) echo '<option value="'.h($k).'"'.($method===$k?' selected':'').'>'.h($v).'</option>';
+        echo '</select></label>';
+    }
+    if (!empty($opts['categories'])) {
+        echo '<label>Category<select name="category"><option value="all">All</option>';
+        foreach ($opts['categories'] as $k=>$v) echo '<option value="'.h($k).'"'.($cat===(string)$k?' selected':'').'>'.h($v).'</option>';
+        echo '</select></label>';
+    }
+    echo '<label class="filter-search"><span>Search</span><input type="search" name="q" value="'.h($q).'" placeholder="'.h($opts['placeholder'] ?? 'Search...').'"></label>';
+    echo '<button class="button primary" type="submit">▽ Apply</button>';
+    echo '<a class="button" href="?module=accounts&view='.h($opts['view'] ?? '').'">Reset</a>';
+    if (!empty($opts['back'])) echo '<a class="button" href="'.h($opts['back']).'">← Accounts</a>';
+    echo '</form>';
+}
+
 /* ============================== HTML ============================== */
 $company = setting('company_name') ?: 'Ahmed Cement';
 $look = lookups();
@@ -889,7 +1174,10 @@ $first = explode(' ', (string)($_SESSION['user']['full_name'] ?? 'Admin'))[0];
 </head>
 <body>
 <aside class="sidebar">
-  <div class="brand"><div class="brandmark">A</div><div><b>AMSCOPY9</b><small>CEMENT ERP</small></div></div>
+  <div class="brand">
+    <div class="brand-word">AMS <b class="accent">SYSTEM</b></div>
+    <span class="tag">FOR EASE</span>
+  </div>
   <nav>
     <?php $last = ''; foreach ($modules as $k => $m):
         if ($m['group'] && $m['group'] !== $last) { echo '<div class="nav-label">' . h($m['group']) . '</div>'; $last = $m['group']; }
@@ -897,11 +1185,12 @@ $first = explode(' ', (string)($_SESSION['user']['full_name'] ?? 'Admin'))[0];
       <a class="<?= $key === $k ? 'active' : '' ?>" href="?module=<?= h($k) ?>"><span class="nav-icon"><?= $m['icon'] ?></span><?= h($m['label']) ?></a>
     <?php endforeach; ?>
   </nav>
+  <button class="theme-toggle" type="button" onclick="document.body.classList.toggle('dark'); this.firstChild.textContent = document.body.classList.contains('dark') ? '🌙' : '☀️';">☀️ Light</button>
   <div class="sidebar-footer">
     <div class="avatar"><?= h(strtoupper(substr((string)($_SESSION['user']['full_name'] ?? 'A'), 0, 1))) ?></div>
     <div><b><?= h($_SESSION['user']['full_name'] ?? 'Administrator') ?></b><small><?= h($_SESSION['user']['role_name'] ?? 'Admin') ?></small></div>
-    <a href="?logout=1" class="logout" title="Sign out">↪</a>
   </div>
+  <a href="?logout=1" class="logout-btn">↪ Logout</a>
 </aside>
 <main>
 <header>
@@ -920,25 +1209,56 @@ $first = explode(' ', (string)($_SESSION['user']['full_name'] ?? 'Admin'))[0];
 
 <?php if ($key === 'dashboard'):
     $cards = [
-        ['label' => 'Sales this month', 'value' => money(scalar("SELECT COALESCE(SUM(total_amount),0) FROM sales WHERE strftime('%Y-%m',sale_date)=strftime('%Y-%m','now') AND status!='cancelled'")), 'tone' => 'blue', 'meta' => 'Revenue posted'],
-        ['label' => 'Open receivables', 'value' => money(scalar("SELECT COALESCE(SUM(amount),0) FROM pending_bills WHERE is_paid=0")), 'tone' => 'amber', 'meta' => 'Unpaid pending bills'],
-        ['label' => 'Stock on hand', 'value' => number_format(scalar("SELECT COUNT(*) FROM v_material_stock WHERE current_qty>0")), 'tone' => 'teal', 'meta' => 'Materials with quantity'],
-        ['label' => 'Open bookings', 'value' => number_format(scalar("SELECT COUNT(*) FROM bookings WHERE status IN ('active','partially_cancelled')")), 'tone' => 'rose', 'meta' => 'Still to dispatch'],
+        ['label' => 'TOTAL INVENTORY', 'value' => money(scalar("SELECT COALESCE(SUM(current_stock_value),0) FROM v_material_stock")), 'tone' => 'orange', 'meta' => 'Lives currently in stock', 'link' => '?module=materials'],
+        ['label' => 'REGISTERED CLIENTS', 'value' => number_format(scalar("SELECT COUNT(*) FROM clients WHERE active=1")), 'tone' => 'indigo', 'meta' => 'Active customer base', 'link' => '?module=clients'],
+        ['label' => 'DAILY CASH RECEIVED', 'value' => money(scalar("SELECT COALESCE(SUM(amount),0) FROM payments WHERE direction='in' AND date(payment_date)=date('now')")), 'tone' => 'green', 'meta' => 'Cash posted today ' . date('M d, Y'), 'link' => '?module=payments'],
+        ['label' => 'DAILY DUE AMOUNT', 'value' => money(scalar("SELECT COALESCE(SUM(amount),0) FROM pending_bills WHERE is_paid=0")), 'tone' => 'rose', 'meta' => 'Across all open bills', 'link' => '?module=pending_bills'],
+        ['label' => 'TOTAL OUTSTANDING', 'value' => money(scalar("SELECT COALESCE(SUM(amount),0) FROM pending_bills WHERE is_paid=0")), 'tone' => 'red', 'meta' => 'Review unpaid bills', 'link' => '?module=pending_bills'],
+        ['label' => 'ACCOUNTS HUB', 'value' => number_format(scalar("SELECT COUNT(*) FROM accounts WHERE active=1")), 'tone' => 'purple', 'meta' => 'Cash + bank + transfers', 'link' => '?module=accounts'],
+        ['label' => 'CASH FLOW VIEW', 'value' => money(scalar("SELECT COALESCE(SUM(CASE WHEN direction='in' THEN amount ELSE -amount END),0) FROM payments")), 'tone' => 'blue', 'meta' => 'Receipts & payments report', 'link' => '?module=reports'],
+        ['label' => 'AUDIT', 'value' => number_format(scalar("SELECT COUNT(*) FROM audit_log")), 'tone' => 'amber', 'meta' => 'Entries in audit trail', 'link' => '?module=audit_log'],
     ];
+    $dueCount = (int)scalar("SELECT COUNT(*) FROM pending_bills WHERE is_paid=0");
     $recent = db()->query("SELECT s.id,s.auto_bill_no,s.sale_date,s.total_amount,s.status,s.sale_type,c.name client_name FROM sales s LEFT JOIN clients c ON c.id=s.client_id ORDER BY s.id DESC LIMIT 8")->fetchAll();
-    $low = db()->query("SELECT * FROM v_low_stock_alerts WHERE reorder_level > 0 LIMIT 6")->fetchAll();
+    $low = db()->query("SELECT * FROM v_low_stock_alerts WHERE reorder_level > 0 ORDER BY current_qty ASC LIMIT 8")->fetchAll();
 ?>
-<section class="welcome">
+<section class="page-hero">
   <div>
-    <div class="eyebrow"><?= strtoupper(date('l, F j, Y')) ?></div>
-    <h2><?= h($greet) ?>, <?= h($first) ?>.</h2>
+    <div class="eyebrow">📊 System Dashboard · <?= date('F j, Y') ?></div>
+    <h2><?= h($greet) ?>, <?= h($first) ?></h2>
     <p>Live picture of <?= h($company) ?> — sales, bookings, stock and collections.</p>
   </div>
-  <a class="button primary" href="?module=sales&new=1">＋ New sale</a>
+  <div class="hero-actions">
+    <a class="button" href="?module=materials">📦 Stock Summary</a>
+    <a class="button" href="?module=clients">👥 Clients</a>
+  </div>
 </section>
+
+<?php if ($dueCount > 0): ?>
+<div class="reminder">
+  <span class="rem-icon">⏰</span>
+  <div class="rem-body"><b>Deadline Reminder</b><small>You have <?= $dueCount ?> due entries. Please review and mark reminders as done.</small></div>
+  <span class="rem-count"><?= $dueCount > 99 ? '99+' : $dueCount ?></span>
+  <a class="button primary" href="?module=pending_bills">Open Notifications</a>
+</div>
+<?php endif; ?>
+
+<div class="quick-pills">
+  <a class="quick-pill" href="?module=materials">📈 Stock Summary</a>
+  <a class="quick-pill" href="?module=reports">📋 Daily Breakdown</a>
+  <a class="quick-pill" href="?module=sales&new=1">🛒 New Sale</a>
+  <a class="quick-pill" href="?module=bookings&new=1">🗓️ New Booking</a>
+  <a class="quick-pill" href="?module=payments&new=1">📞 Payments</a>
+  <a class="quick-pill" href="?module=audit_log">🧾 Client Ledger</a>
+</div>
+
 <div class="cards"><?php foreach ($cards as $c): ?>
-  <div class="card"><div class="card-top"><span><?= h($c['label']) ?></span><i class="<?= h($c['tone']) ?>">◈</i></div><strong><?= h($c['value']) ?></strong><small><?= h($c['meta']) ?></small></div>
+  <a href="<?= h($c['link']) ?>" class="card tone-<?= h($c['tone']) ?>" style="text-decoration:none;color:inherit">
+    <div class="card-top"><span><?= h($c['label']) ?></span><i>◈</i></div>
+    <strong><?= h($c['value']) ?></strong><small><?= h($c['meta']) ?></small>
+  </a>
 <?php endforeach; ?></div>
+
 <div class="grid-two">
   <section class="panel">
     <div class="panel-head"><div><div class="eyebrow">RECENT ACTIVITY</div><h3>Latest sales</h3></div><a href="?module=sales">View all →</a></div>
@@ -955,17 +1275,17 @@ $first = explode(' ', (string)($_SESSION['user']['full_name'] ?? 'Admin'))[0];
     </tbody></table></div>
   </section>
   <section class="panel">
-    <div class="panel-head"><div><div class="eyebrow">QUICK ACTIONS</div><h3>Work faster</h3></div></div>
+    <div class="panel-head"><div><div class="eyebrow">⚡ QUICK ACTIONS</div><h3>Work faster</h3></div></div>
     <div class="quick-grid">
-      <a href="?module=clients&new=1">＋<b>Add client</b><small>Register a customer</small></a>
-      <a href="?module=bookings&new=1">＋<b>New booking</b><small>Advance order</small></a>
-      <a href="?module=purchases&new=1">＋<b>Record purchase</b><small>Add stock (GRN)</small></a>
-      <a href="?module=payments&new=1">＋<b>Record payment</b><small>Cash in or out</small></a>
+      <a href="?module=clients&new=1"><span class="qi" style="background:#dcfce7;color:#166534">👥</span><span><b>Add client</b><small>Register a customer</small></span></a>
+      <a href="?module=bookings&new=1"><span class="qi" style="background:#ede9fe;color:#5b21b6">🗓️</span><span><b>New booking</b><small>Advance order</small></span></a>
+      <a href="?module=purchases&new=1"><span class="qi" style="background:#dbeafe;color:#1e40af">🚚</span><span><b>Record purchase</b><small>Add stock (GRN)</small></span></a>
+      <a href="?module=payments&new=1"><span class="qi" style="background:#ffedd5;color:#9a3412">💸</span><span><b>Record payment</b><small>Cash in or out</small></span></a>
     </div>
     <?php if ($low): ?>
-      <div class="panel-head"><div><div class="eyebrow">STOCK</div><h3>Below reorder</h3></div></div>
+      <div class="panel-head"><div><div class="eyebrow">📦 STOCK</div><h3>Below reorder</h3></div></div>
       <div class="table-wrap"><table><thead><tr><th>Material</th><th class="right">Qty</th></tr></thead><tbody>
-      <?php foreach ($low as $r): ?><tr><td><?= h($r['name']) ?></td><td class="right"><?= h($r['current_qty']) ?> <?= h($r['unit']) ?></td></tr><?php endforeach; ?>
+      <?php foreach ($low as $r): ?><tr><td><?= h($r['name']) ?></td><td class="right" style="color:var(--red);font-weight:700"><?= h($r['current_qty']) ?> <?= h($r['unit']) ?></td></tr><?php endforeach; ?>
       </tbody></table></div>
     <?php endif; ?>
   </section>
@@ -1160,16 +1480,53 @@ elseif ($key === 'bookings'):
             section_end();
             form_end('bookings', $edit ? 'Update booking' : 'Save booking');
         endif;
-        toolbar('bookings', $search, 'New booking');
-        $rows = list_bookings($search);
-        echo '<section class="panel"><div class="panel-head"><div><div class="eyebrow">' . count($rows) . ' RECORDS</div><h3>Bookings</h3></div><span class="muted">Open bookings can be dispatched from Sales</span></div><div class="table-wrap"><table><thead><tr><th>Bill</th><th>Date</th><th>Client</th><th class="right">Total</th><th class="right">Paid</th><th>Status</th><th></th></tr></thead><tbody>';
+        $bfClient = (int)($_GET['client_id'] ?? 0);
+        $bfBill = trim((string)($_GET['bill'] ?? ''));
+        $bfFrom = $_GET['from'] ?? '';
+        $bfTo = $_GET['to'] ?? '';
+        $bfRows = (int)($_GET['rows'] ?? 50);
+        // Build filtered query
+        $bwhere = ['1=1']; $bparams = [];
+        if ($bfClient) { $bwhere[]='b.client_id=?'; $bparams[]=$bfClient; }
+        if ($bfBill !== '') { $bwhere[]='(b.manual_bill_no LIKE ? OR b.auto_bill_no LIKE ?)'; $bparams[]='%'.$bfBill.'%'; $bparams[]='%'.$bfBill.'%'; }
+        if ($bfFrom) { $bwhere[]='date(b.booking_date)>=?'; $bparams[]=$bfFrom; }
+        if ($bfTo) { $bwhere[]='date(b.booking_date)<=?'; $bparams[]=$bfTo; }
+        $bTotal = (int)db()->prepare("SELECT COUNT(*) FROM bookings b WHERE ".implode(' AND ',$bwhere))->execute($bparams) ? 0 : 0;
+        // count properly
+        $cstmt = db()->prepare("SELECT COUNT(*) FROM bookings b WHERE ".implode(' AND ',$bwhere)); $cstmt->execute($bparams); $bTotal=(int)$cstmt->fetchColumn();
+        $bpage = max(1, (int)($_GET['page'] ?? 1));
+        $boff = ($bpage-1)*$bfRows;
+        $bsql = "SELECT b.*, c.name client_name, (SELECT GROUP_CONCAT(m.name, ' | ') FROM booking_items bi JOIN materials m ON m.id=bi.material_id WHERE bi.booking_id=b.id) material_name
+                 FROM bookings b LEFT JOIN clients c ON c.id=b.client_id
+                 WHERE ".implode(' AND ',$bwhere)." ORDER BY b.id DESC LIMIT $bfRows OFFSET $boff";
+        $bst = db()->prepare($bsql); $bst->execute($bparams); $rows = $bst->fetchAll();
+        echo '<section class="page-hero" style="background:linear-gradient(135deg,#fff7ed,#ffedd5)"><div><h2>🗓️ Bookings</h2><p>Advance orders that can be dispatched from Sales.</p></div><div class="hero-actions"><a class="button" href="?module=dashboard">← Back</a><a class="button primary" href="?module=bookings&new=1">+ Add Booking</a></div></section>';
+        echo '<form class="filter-card" method="get"><input type="hidden" name="module" value="bookings"><div class="fc-grid">';
+        echo '<label>Client Name<div class="combo" data-source="clients"><input type="hidden" name="client_id" value="'.$bfClient.'"><input type="text" class="combo-input" placeholder="Search by name or code..."></div></label>';
+        echo '<label>Bill No<input type="text" name="bill" value="'.h($bfBill).'" placeholder="Manual / Auto bill no..."></label>';
+        echo '<label>Date From<input type="date" name="from" value="'.h($bfFrom).'"></label>';
+        echo '<label>Date To<input type="date" name="to" value="'.h($bfTo).'"></label>';
+        echo '<label>Rows<select name="rows">';
+        foreach ([10,25,50,100] as $rn) echo '<option value="'.$rn.'"'.($bfRows===$rn?' selected':'').'>'.$rn.'</option>';
+        echo '</select></label>';
+        echo '</div><div class="fc-actions"><button class="button primary" type="submit">Filter</button><a class="button" href="?module=bookings">Reset</a><div class="spacer"></div></div></form>';
+        echo '<section class="panel"><div class="table-wrap"><table><thead><tr><th>Manual Bill</th><th>Auto Bill</th><th>Client</th><th>Material</th><th class="right">Qty</th><th class="right">Total</th><th class="right">Actually Paid</th><th>Actions</th></tr></thead><tbody>';
         foreach ($rows as $r) {
-            echo '<tr><td><b>' . h($r['auto_bill_no']) . '</b><span class="sub">' . h($r['manual_bill_no']) . '</span></td><td>' . h(substr((string)$r['booking_date'], 0, 10)) . '</td><td class="name-cell">' . h($r['client_name'] ?? '—') . '</td><td class="right">' . money($r['total_amount']) . '</td><td class="right">' . money($r['paid_amount']) . '</td><td>' . badge($r['status']) . '</td>';
-            actions('bookings', (int)$r['id']);
-            echo '</tr>';
+            $qty = 0;
+            $bi = db()->prepare("SELECT COALESCE(SUM(qty_booked),0) q FROM booking_items WHERE booking_id=?"); $bi->execute([$r['id']]); $qty = (float)$bi->fetchColumn();
+            echo '<tr><td><span class="badge" style="background:#fef3c7;color:#92400e">'.h($r['manual_bill_no']).'</span></td>';
+            echo '<td><span class="badge sub">'.h($r['auto_bill_no']).'</span></td>';
+            echo '<td class="name-cell">'.h($r['client_name'] ?? '—').'</td>';
+            echo '<td class="muted">'.h($r['material_name'] ?: '—').'</td>';
+            echo '<td class="right">'.h($qty ?: 0).'</td>';
+            echo '<td class="right" style="font-weight:700">'.money($r['total_amount']).'</td>';
+            echo '<td class="right" style="font-weight:700;color:var(--green)">'.money($r['paid_amount']).'</td>';
+            echo '<td>'.action_icons('bookings',(int)$r['id'],['view'=>true,'recv'=>true,'edit'=>true,'del'=>true,'delLabel'=>'Delete']).'</td></tr>';
         }
-        if (!$rows) echo '<tr><td colspan="7" class="empty">No bookings found.</td></tr>';
-        echo '</tbody></table></div></section>';
+        if (!$rows) echo '<tr><td colspan="8" class="empty">No bookings found.</td></tr>';
+        echo '</tbody></table></div>';
+        echo paginate($bTotal, $bfRows, $bpage, '?module=bookings&client_id='.$bfClient.'&bill='.urlencode($bfBill).'&from='.urlencode($bfFrom).'&to='.urlencode($bfTo).'&rows='.$bfRows);
+        echo '</section>';
     endif;
 
 elseif ($key === 'purchases'):
@@ -1432,6 +1789,18 @@ elseif ($key === 'delivery_persons'):
     echo '</tbody></table></div></section>';
 
 elseif ($key === 'accounts'):
+    $view = $_GET['view'] ?? '';
+    $allAccounts = db()->query("SELECT * FROM accounts WHERE active=1 ORDER BY name")->fetchAll();
+    $cashAccts = array_values(array_filter($allAccounts, fn($a) => account_channel($a) === 'cash'));
+    $bankAccts = array_values(array_filter($allAccounts, fn($a) => account_channel($a) === 'bank'));
+    $cashTotal = array_sum(array_column($cashAccts, 'balance'));
+    $bankTotal = array_sum(array_column($bankAccts, 'balance'));
+    $companyTotal = array_sum(array_column($allAccounts, 'balance'));
+    [$from, $to] = date_filter();
+    $q = trim((string)($_GET['q'] ?? ''));
+    $method = $_GET['method'] ?? 'all';
+
+    // ----- Add / edit form (same as before) -----
     if ($isNew || $edit):
         form_start($edit ? 'Update account' : 'Add account', 'Running balance is maintained by payments. Edit opening balance only.', 'accounts', $edit);
         section('Account');
@@ -1449,16 +1818,426 @@ elseif ($key === 'accounts'):
         if ($edit) echo chk('active', 'Active', $record['active'] ?? 1);
         section_end();
         form_end('accounts');
+
+    // ----- Total cash KPI drill-down -----
+    elseif ($view === 'total-cash'):
+        money_page_hero('💵', 'Total Cash (KPI Drill-Down)', 'Choose Cash or Bank to see account balances and ledgers.');
+        echo '<div class="cards two">';
+        kpi_card('💵 CASH BALANCES', money($cashTotal), 'green', count($cashAccts).' cash accounts', '?module=accounts&view=cash-accounts', 'View cash accounts →');
+        kpi_card('🏦 BANK BALANCES', money($bankTotal), 'orange', count($bankAccts).' bank accounts', '?module=accounts&view=bank-accounts', 'View bank accounts →');
+        echo '</div>';
+
+    // ----- Cash accounts -----
+    elseif ($view === 'cash-accounts'):
+        money_page_hero('💸', 'Cash Accounts', 'All active cash accounts with current balances.', [['Total Cash','?module=accounts&view=total-cash']]);
+        echo '<div class="cards two">';
+        kpi_card('Total Cash', money($cashTotal), 'green', '', '', '');
+        kpi_card('Cash Accounts', (string)count($cashAccts), 'cyan', '', '', '');
+        echo '</div>';
+        echo '<div class="acct-grid">';
+        foreach ($cashAccts as $a) {
+            $neg = $a['balance'] < 0;
+            echo '<div class="acct-card">';
+            echo '<div class="acct-head"><h3>'.h($a['name']).'</h3><strong class="'.($neg?'neg':'pos').'">'.money($a['balance']).'</strong></div>';
+            echo '<div class="acct-badges">'.group_badge(account_group($a)).channel_badge('cash').'</div>';
+            echo '<a class="button sm" href="?module=accounts&view=client-payments&account_id='.$a['id'].'">🧾 Ledger</a>';
+            echo '</div>';
+        }
+        echo '</div>';
+
+    // ----- Bank accounts -----
+    elseif ($view === 'bank-accounts'):
+        money_page_hero('🏛️', 'Bank Accounts', 'All active bank accounts with current balances.', [['Total Cash','?module=accounts&view=total-cash']]);
+        echo '<div class="cards two">';
+        kpi_card('Total Bank', money($bankTotal), 'amber', '', '', '');
+        kpi_card('Bank Accounts', (string)count($bankAccts), 'cyan', '', '', '');
+        echo '</div>';
+        echo '<div class="acct-grid">';
+        foreach ($bankAccts as $a) {
+            $neg = $a['balance'] < 0;
+            echo '<div class="acct-card">';
+            echo '<div class="acct-head"><h3>'.h($a['name']).'</h3><strong class="'.($neg?'neg':'pos').'">'.money($a['balance']).'</strong></div>';
+            echo '<div class="acct-badges">'.group_badge(account_group($a)).channel_badge('bank').'</div>';
+            echo '<a class="button sm" href="?module=accounts&view=client-payments&account_id='.$a['id'].'">🧾 Ledger</a>';
+            echo '</div>';
+        }
+        echo '</div>';
+
+    // ----- Company money -----
+    elseif ($view === 'company-money'):
+        money_page_hero('🐷', 'Company Money (KPI Drill-Down)', 'Sum of all active company account balances.');
+        echo '<div class="cards two">';
+        kpi_card('💰 TOTAL MONEY AVAILABLE', money($companyTotal), 'purple', count($allAccounts).' company accounts', '', '');
+        kpi_card('🏢 COMPANY ACCOUNTS', (string)count($allAccounts), 'cyan', '', '', '');
+        echo '</div>';
+        echo '<div class="acct-grid">';
+        foreach ($allAccounts as $a) {
+            $ch = account_channel($a);
+            echo '<div class="acct-card">';
+            echo '<div class="acct-head"><h3>'.h($a['name']).'</h3><strong class="pos">'.money($a['balance']).'</strong></div>';
+            echo '<div class="acct-badges">'.group_badge(account_group($a)).channel_badge($ch).'</div>';
+            echo '</div>';
+        }
+        echo '</div>';
+
+    // ----- Client payments (in) -----
+    elseif ($view === 'client-payments'):
+        money_page_hero('👥', 'Client Payments', 'Money received from clients.', [['Dashboard','?module=dashboard']], '<a class="button primary" href="?module=payments&new=1">+ New Payment</a>');
+        $where = ["direction='in'", "party_type='client'", "date(payment_date) BETWEEN ? AND ?"];
+        $params = [$from, $to];
+        if ($method !== 'all' && in_array($method, ['cash','bank','adjustment'], true)) { $where[] = 'payment_mode=?'; $params[] = $method; }
+        if ($q !== '') { $where[] = '(party_name_snapshot LIKE ? OR manual_bill_no LIKE ? OR reference LIKE ? OR notes LIKE ?)'; $lp='%'.$q.'%'; array_push($params,$lp,$lp,$lp,$lp); }
+        if (!empty($_GET['account_id'])) { $where[]='payment_account_id=?'; $params[]=(int)$_GET['account_id']; }
+        $cst = db()->prepare("SELECT COUNT(*) FROM payments WHERE ".implode(' AND ',$where)); $cst->execute($params); $totalN=(int)$cst->fetchColumn();
+        $page = max(1,(int)($_GET['page']??1)); $perPage=(int)($_GET['rows']??50); $offset=($page-1)*$perPage;
+        $sql = "SELECT * FROM payments WHERE ".implode(' AND ',$where)." ORDER BY payment_date DESC LIMIT $perPage OFFSET $offset";
+        $st = db()->prepare($sql); $st->execute($params); $tx = $st->fetchAll();
+        $total = array_sum(array_column($tx,'amount'));
+        echo '<div class="cards two">';
+        kpi_card('TOTAL RECEIVED', money($total), 'green', number_format($totalN).' payments', '', '');
+        kpi_card('PAYMENTS IN PERIOD', number_format($totalN), 'cyan', '', '', '');
+        echo '</div>';
+        echo '<form class="filter-card" method="get"><input type="hidden" name="module" value="accounts"><input type="hidden" name="view" value="client-payments"><div class="fc-grid">';
+        echo '<label>From<input type="date" name="from" value="'.h($from).'"></label>';
+        echo '<label>To<input type="date" name="to" value="'.h($to).'"></label>';
+        echo '<label>Method<select name="method"><option value="all">All...</option><option value="cash"'.($method==='cash'?' selected':'').'>Cash</option><option value="bank"'.($method==='bank'?' selected':'').'>Bank</option><option value="adjustment"'.($method==='adjustment'?' selected':'').'>Adjustment</option></select></label>';
+        echo '<label>Rows<select name="rows">'; foreach([10,25,50,100] as $r) echo '<option value="'.$r.'"'.($perPage===$r?' selected':'').'>'.$r.'</option>'; echo '</select></label>';
+        echo '<label class="filter-search" style="grid-column:1/-1"><span>Search</span><input type="search" name="q" value="'.h($q).'" placeholder="Name, bill, reference, account, note..."></label>';
+        echo '</div><div class="fc-actions"><button class="button primary" type="submit">▽ Apply</button><a class="button" href="?module=accounts&view=client-payments">Reset</a><a class="button" href="?module=accounts">← Accounts</a></div></form>';
+        if (!$tx) echo '<div class="empty">No records found.</div>';
+        else {
+            echo '<div class="tx-list"><table><thead><tr><th>Date</th><th>Client</th><th>Type</th><th>Account</th><th class="right">Amount</th><th>Method</th><th>Bill #</th><th>Note</th><th>Actions</th></tr></thead><tbody>';
+            foreach ($tx as $t) {
+                $acct = $t['account_name'] ?: ($t['payment_account_id'] ? (db()->query("SELECT name FROM accounts WHERE id=".(int)$t['payment_account_id'])->fetchColumn() ?: '—') : '—');
+                echo '<tr><td>'.h(substr((string)$t['payment_date'],0,16)).'</td>';
+                echo '<td class="name-cell">'.h($t['party_name_snapshot'] ?: 'Walk-in client').'</td>';
+                echo '<td>'.badge($t['reference_type'] ?: 'receipt').'</td>';
+                echo '<td>'.h($acct).'</td>';
+                echo '<td class="right" style="font-weight:800;color:var(--green)">'.money($t['amount']).'</td>';
+                echo '<td>'.badge($t['payment_mode']).'</td>';
+                echo '<td class="muted">'.h($t['manual_bill_no'] ?: '').'</td>';
+                echo '<td class="muted">'.h($t['notes'] ?: $t['reference']).'</td>';
+                echo '<td>'.action_icons('payments',(int)$t['id'],['view'=>false,'edit'=>true,'del'=>true]).'</td></tr>';
+            }
+            echo '</tbody></table></div>';
+            echo paginate($totalN, $perPage, $page, '?module=accounts&view=client-payments&from='.urlencode($from).'&to='.urlencode($to).'&method='.urlencode($method).'&q='.urlencode($q).'&rows='.$perPage);
+        }
+
+    // ----- Supplier payments (out) -----
+    elseif ($view === 'supplier-payments'):
+        money_page_hero('🚚', 'Supplier Payments', 'Money paid out to suppliers.', [['Dashboard','?module=dashboard']], '<a class="button primary" href="?module=payments&new=1">+ New Payment</a>');
+        $where = ["direction='out'", "party_type='supplier'", "date(payment_date) BETWEEN ? AND ?"];
+        $params = [$from, $to];
+        if ($method !== 'all' && in_array($method, ['cash','bank','adjustment'], true)) { $where[] = 'payment_mode=?'; $params[] = $method; }
+        if ($q !== '') { $where[] = '(party_name_snapshot LIKE ? OR manual_bill_no LIKE ? OR reference LIKE ? OR notes LIKE ?)'; $lp='%'.$q.'%'; array_push($params,$lp,$lp,$lp,$lp); }
+        if (!empty($_GET['account_id'])) { $where[]='payment_account_id=?'; $params[]=(int)$_GET['account_id']; }
+        $cst = db()->prepare("SELECT COUNT(*) FROM payments WHERE ".implode(' AND ',$where)); $cst->execute($params); $totalN=(int)$cst->fetchColumn();
+        $page = max(1,(int)($_GET['page']??1)); $perPage=(int)($_GET['rows']??50); $offset=($page-1)*$perPage;
+        $sql = "SELECT * FROM payments WHERE ".implode(' AND ',$where)." ORDER BY payment_date DESC LIMIT $perPage OFFSET $offset";
+        $st = db()->prepare($sql); $st->execute($params); $tx = $st->fetchAll();
+        $total = array_sum(array_column($tx,'amount'));
+        echo '<div class="cards two">';
+        kpi_card('TOTAL PAID', money($total), 'rose', number_format($totalN).' payments', '', '');
+        kpi_card('TRANSACTIONS IN PERIOD', number_format($totalN), 'orange', '', '', '');
+        echo '</div>';
+        echo '<form class="filter-card" method="get"><input type="hidden" name="module" value="accounts"><input type="hidden" name="view" value="supplier-payments"><div class="fc-grid">';
+        echo '<label>From<input type="date" name="from" value="'.h($from).'"></label>';
+        echo '<label>To<input type="date" name="to" value="'.h($to).'"></label>';
+        echo '<label>Supplier<input type="search" name="q" value="'.h($q).'" placeholder="All suppliers..."></label>';
+        echo '<label>Account<select name="account_id"><option value="">All accounts...</option>';
+        foreach ($allAccounts as $a) echo '<option value="'.$a['id'].'"'.((string)($_GET['account_id']??'')===(string)$a['id']?' selected':'').'>'.h($a['name']).'</option>';
+        echo '</select></label>';
+        echo '<label>Method<select name="method"><option value="all"'.($method==='all'?' selected':'').'>All</option><option value="cash"'.($method==='cash'?' selected':'').'>Cash</option><option value="bank"'.($method==='bank'?' selected':'').'>Bank</option></select></label>';
+        echo '<label>Rows<select name="rows">'; foreach([10,25,50,100] as $r) echo '<option value="'.$r.'"'.($perPage===$r?' selected':'').'>'.$r.'</option>'; echo '</select></label>';
+        echo '<label style="grid-column:1/-1"><input type="search" name="q2" placeholder="Name, bill, reference, account, note..." value="'.h($q).'"></label>';
+        echo '</div><div class="fc-actions"><button class="button primary" type="submit">▽ Apply</button><a class="button" href="?module=accounts&view=supplier-payments">Reset</a><a class="button" href="?module=accounts">← Accounts</a></div></form>';
+        if (!$tx) echo '<div class="empty">No records found.</div>';
+        else {
+            echo '<div class="tx-list"><table><thead><tr><th>Date</th><th>Supplier</th><th>Account</th><th class="right">Amount</th><th>Method</th><th>Bill #</th><th>Note</th><th>Actions</th></tr></thead><tbody>';
+            foreach ($tx as $t) {
+                $acct = $t['account_name'] ?: ($t['payment_account_id'] ? (db()->query("SELECT name FROM accounts WHERE id=".(int)$t['payment_account_id'])->fetchColumn() ?: '—') : '—');
+                $modeLabel = $t['payment_mode']==='bank' ? 'Bank Transfer' : ucfirst($t['payment_mode']);
+                echo '<tr><td>'.h(substr((string)$t['payment_date'],0,16)).'</td>';
+                echo '<td class="name-cell">'.h($t['party_name_snapshot'] ?: 'Supplier').'</td>';
+                echo '<td>'.h($acct).'</td>';
+                echo '<td class="right" style="font-weight:800">'.money($t['amount']).'</td>';
+                echo '<td><span class="badge '.($t['payment_mode']==='bank'?'bank':'cash').'">'.$modeLabel.'</span></td>';
+                echo '<td class="muted">'.h($t['manual_bill_no'] ?: '').'</td>';
+                echo '<td class="muted">'.h($t['notes'] ?: $t['reference']).'</td>';
+                echo '<td>'.action_icons('payments',(int)$t['id'],['view'=>false,'edit'=>true,'del'=>true]).'</td></tr>';
+            }
+            echo '</tbody></table></div>';
+            echo paginate($totalN, $perPage, $page, '?module=accounts&view=supplier-payments&from='.urlencode($from).'&to='.urlencode($to).'&method='.urlencode($method).'&q='.urlencode($q).'&rows='.$perPage);
+        }
+
+    // ----- Receipts (booking + sale) -----
+    elseif ($view === 'receipts'):
+        money_page_hero('🧾', 'Receipts (KPI Drill-Down)', 'Paid receipts from Bookings and Direct Sales.');
+        // booking receipts
+        $bWhere = ["b.status!='cancelled'", "date(b.booking_date) BETWEEN ? AND ?", "b.paid_amount > 0"];
+        $bParams = [$from, $to];
+        if ($q !== '') { $bWhere[] = 'c.name LIKE ?'; $bParams[] = '%'.$q.'%'; }
+        $bsql = "SELECT b.*, c.name client_name FROM bookings b JOIN clients c ON c.id=b.client_id WHERE ".implode(' AND ',$bWhere)." ORDER BY b.booking_date DESC";
+        $bst = db()->prepare($bsql); $bst->execute($bParams); $bookings = $bst->fetchAll();
+        $bTotal = array_sum(array_column($bookings, 'paid_amount'));
+        // sale receipts (total_paid_cache for cash sales)
+        $sWhere = ["s.status!='cancelled'", "date(s.sale_date) BETWEEN ? AND ?", "s.total_paid_cache > 0"];
+        $sParams = [$from, $to];
+        if ($q !== '') { $sWhere[] = 'c.name LIKE ?'; $sParams[] = '%'.$q.'%'; }
+        $ssql = "SELECT s.*, c.name client_name FROM sales s JOIN clients c ON c.id=s.client_id WHERE ".implode(' AND ',$sWhere)." ORDER BY s.sale_date DESC";
+        $sst = db()->prepare($ssql); $sst->execute($sParams); $sales = $sst->fetchAll();
+        $sTotal = array_sum(array_column($sales, 'total_paid_cache'));
+        $total = $bTotal + $sTotal;
+        $count = count($bookings) + count($sales);
+        echo '<div class="cards two">';
+        kpi_card('🧾 TOTAL RECEIPTS', money($total), 'sky', '', '', '');
+        kpi_card('🔢 TRANSACTIONS', (string)$count, 'purple', '', '', '');
+        echo '</div>';
+        money_filter_bar(['view'=>'receipts','placeholder'=>'Search...']);
+        if ($count === 0) echo '<div class="empty">No records found.</div>';
+        else echo '<div class="tx-cards">';
+        foreach ($bookings as $b) {
+            echo '<div class="tx-card"><div class="tx-head"><h3>'.h($b['client_name']).'</h3><strong class="pos">'.money($b['paid_amount']).'</strong></div>';
+            echo '<div class="tx-meta"><span class="badge booking">Booking Receipt</span><span>'.h($b['booking_date']).'</span></div>';
+            echo '<div class="tx-sub">Bill: '.h($b['manual_bill_no']).'</div></div>';
+        }
+        foreach ($sales as $s) {
+            echo '<div class="tx-card"><div class="tx-head"><h3>'.h($s['client_name']).'</h3><strong class="pos">'.money($s['total_paid_cache']).'</strong></div>';
+            echo '<div class="tx-meta">'.badge($s['sale_type']).'<span>'.h($s['sale_date']).'</span></div>';
+            echo '<div class="tx-sub">Bill: '.h($s['manual_bill_no']).'</div></div>';
+        }
+        echo '</div>';
+
+    // ----- Expenditures -----
+    elseif ($view === 'expenditures'):
+        money_page_hero('🗂️', 'Expenditures (KPI Drill-Down)', 'Cash drawer out entries in the selected date range.');
+        $where = ["direction='out'", "date(payment_date) BETWEEN ? AND ?"];
+        $params = [$from, $to];
+        if ($method !== 'all' && in_array($method, ['cash','bank','adjustment'], true)) { $where[] = 'payment_mode=?'; $params[] = $method; }
+        if ($q !== '') { $where[] = '(party_name_snapshot LIKE ? OR manual_bill_no LIKE ? OR reference LIKE ? OR notes LIKE ? OR reference_type LIKE ?)'; $lp='%'.$q.'%'; array_push($params,$lp,$lp,$lp,$lp,$lp); }
+        $sql = "SELECT * FROM payments WHERE ".implode(' AND ',$where)." ORDER BY payment_date DESC";
+        $st = db()->prepare($sql); $st->execute($params); $tx = $st->fetchAll();
+        $total = array_sum(array_column($tx, 'amount'));
+        echo '<div class="cards two">';
+        kpi_card('📤 TOTAL SPENT', money($total), 'orange', '', '', '');
+        kpi_card('📝 ENTRIES', (string)count($tx), 'cyan', '', '', '');
+        echo '</div>';
+        money_filter_bar(['view'=>'expenditures','methods'=>['cash'=>'Cash','bank'=>'Bank','adjustment'=>'Adjustment'],'back'=>'?module=accounts']);
+        if (!$tx) echo '<div class="empty">No records found.</div>';
+        else echo '<div class="tx-list"><table><thead><tr><th>Date</th><th>Category</th><th class="right">Amount</th><th>Method</th><th>Note</th></tr></thead><tbody>';
+        foreach ($tx as $t) {
+            $cat = ucwords(str_replace('_',' ', $t['reference_type'] ?: 'other'));
+            if ($t['party_name_snapshot']) $cat = h($t['party_name_snapshot']);
+            echo '<tr><td>'.h(substr((string)$t['payment_date'],0,16)).'</td><td><span class="badge expense">'.$cat.'</span></td>';
+            echo '<td class="right" style="color:var(--brand-2);font-weight:800">'.money($t['amount']).'</td>';
+            echo '<td>'.badge($t['payment_mode']).'</td>';
+            echo '<td class="muted">'.h($t['notes'] ?: $t['reference'] ?: ('[SRC:'.($t['reference_type']?:$t['party_type']).':'.$t['id'].']')).'</td></tr>';
+        }
+        echo '</tbody></table></div>';
+
+    // ----- Account Transfers -----
+    elseif ($view === 'transfers' || $view === 'new-transfer'):
+        if ($view === 'new-transfer' || isset($_GET['new'])):
+            money_page_hero('⇄', 'New Transfer', 'Move money between two of your company accounts.', [['Transfers','?module=accounts&view=transfers']], '<a class="button primary" href="?module=accounts&view=transfers">+ New Transfer</a>');
+            $acctOpts = [];
+            foreach ($allAccounts as $a) $acctOpts[$a['id']] = $a['name'] . ' (' . money($a['balance']) . ')';
+            echo '<div class="two-col"><div>';
+            echo '<section class="panel"><div class="panel-body" style="padding:20px">';
+            echo '<form method="post" class="form-body" id="transfer-form">';
+            echo '<input type="hidden" name="csrf" value="'.h(csrf()).'"><input type="hidden" name="action" value="transfer">';
+            echo '<div class="modal-grid">';
+            echo '<label class="field">From Account *<select name="from_account_id" id="tf-from" required><option value="">Search source account...</option>';
+            foreach ($allAccounts as $a) echo '<option value="'.$a['id'].'" data-balance="'.(float)$a['balance'].'">'.h($a['name']).'</option>';
+            echo '</select></label>';
+            echo '<label class="field">To Account *<select name="to_account_id" id="tf-to" required><option value="">Search destination account...</option>';
+            foreach ($allAccounts as $a) echo '<option value="'.$a['id'].'" data-balance="'.(float)$a['balance'].'">'.h($a['name']).'</option>';
+            echo '</select></label>';
+            echo inp('amount', 'Amount (Rs.)', '', 'number', true);
+            echo inp('description', 'Description', '', 'text', false, 'placeholder="e.g. Cash deposit to bank"');
+            echo inp('transfer_date', 'Date', date('Y-m-d'), 'date', true);
+            echo inp('reference', 'Reference', '', 'text');
+            echo area('notes', 'Note (optional)', '', 'full');
+            echo '</div>';
+            echo '<div class="form-actions" style="margin-top:16px"><button class="button primary" type="submit">⇄ Record Transfer</button><a class="button" href="?module=accounts&view=transfers">Cancel</a></div>';
+            echo '</form></div></section></div>';
+            echo '<div><div class="live-preview"><div class="eyebrow">👁 LIVE PREVIEW</div>';
+            echo '<div class="lp-flow"><span class="lp-chip from" id="lp-from">From</span><span class="tf-arrow">→</span><span class="lp-chip to" id="lp-to">To</span></div>';
+            echo '<div class="lp-amount" id="lp-amt">Rs. 0.00</div>';
+            echo '<div class="lp-row"><span>From balance after</span><strong id="lp-from-bal">—</strong></div>';
+            echo '<div class="lp-row"><span>To balance after</span><strong id="lp-to-bal">—</strong></div>';
+            echo '</div></div></div>';
+            echo '<script>
+            (function(){
+              var f=document.getElementById("tf-from"),t=document.getElementById("tf-to"),a=document.getElementById("amount"),d=document.getElementById("transfer_date");
+              function calc(){
+                var amt=parseFloat(a.value||0);
+                var fb=f.options[f.selectedIndex]?parseFloat(f.options[f.selectedIndex].dataset.balance||0):0;
+                var tb=t.options[t.selectedIndex]?parseFloat(t.options[t.selectedIndex].dataset.balance||0):0;
+                document.getElementById("lp-from").textContent=f.options[f.selectedIndex]?f.options[f.selectedIndex].text:"From";
+                document.getElementById("lp-to").textContent=t.options[t.selectedIndex]?t.options[t.selectedIndex].text:"To";
+                document.getElementById("lp-amt").textContent="Rs. "+amt.toFixed(2);
+                document.getElementById("lp-from-bal").textContent=f.value?"Rs. "+(fb-amt).toFixed(2):"—";
+                document.getElementById("lp-to-bal").textContent=t.value?"Rs. "+(tb+amt).toFixed(2):"—";
+              }
+              f.addEventListener("change",calc);t.addEventListener("change",calc);a.addEventListener("input",calc);calc();
+            })();
+            </script>';
+        else:
+            money_page_hero('⇄', 'Account Transfers', 'Inter-account fund movements with full audit trail.', [], '<a class="button primary" href="?module=accounts&view=new-transfer">+ New Transfer</a>');
+            $trows = db()->query("SELECT t.*, fa.name from_name, ta.name to_name FROM account_transfers t JOIN accounts fa ON fa.id=t.from_account_id JOIN accounts ta ON ta.id=t.to_account_id ORDER BY t.transfer_date DESC")->fetchAll();
+            $total = array_sum(array_column($trows, 'amount'));
+            echo '<div class="cards two">';
+            kpi_card('TOTAL TRANSFERRED', money($total), 'blue', '', '', '');
+            kpi_card('TRANSFERS IN PERIOD', (string)count($trows), 'purple', '', '', '');
+            echo '</div>';
+            echo '<div class="filter-bar"><label>From<input type="date" value="'.h(date('Y-m-d',strtotime('-30 days'))).'"></label><label>To<input type="date" value="'.h(date('Y-m-d')).'"></label><label class="filter-search"><span>Search</span><input placeholder="Description or note..."></label><button class="button primary">▽ Apply</button><a class="button" href="?module=accounts">Reset</a></div>';
+            if (!$trows) echo '<div class="empty">No transfers recorded. <a href="?module=accounts&view=new-transfer">Create the first transfer →</a></div>';
+            else {
+                echo '<div class="tx-list"><table><thead><tr><th>Date</th><th>From</th><th></th><th>To</th><th class="right">Amount</th><th>Description</th><th>Note</th></tr></thead><tbody>';
+                foreach ($trows as $t) {
+                    echo '<tr><td>'.h(substr((string)$t['transfer_date'],0,16)).'</td>';
+                    echo '<td><span class="tf-from">↗ '.h($t['from_name']).'</span></td><td class="tf-arrow">→</td>';
+                    echo '<td><span class="tf-to">✓ '.h($t['to_name']).'</span></td>';
+                    echo '<td class="right" style="font-weight:800">'.money($t['amount']).'</td>';
+                    echo '<td>'.h($t['description'] ?: '—').'</td><td class="muted">'.h($t['notes'] ?: '').'</td></tr>';
+                }
+                echo '</tbody></table></div>';
+            }
+        endif;
+
+    // ----- Reconciliations -----
+    elseif ($view === 'reconciliations'):
+        money_page_hero('🕒', 'Account Reconciliations', 'Immutable audit history of account reconciliations.', [['Accounts','?module=accounts']]);
+        $rrows = db()->query("SELECT r.*, a.name account_name FROM account_reconciliations r JOIN accounts a ON a.id=r.account_id ORDER BY r.reconciliation_date DESC LIMIT 200")->fetchAll();
+        [$from,$to] = date_filter();
+        $result = $_GET['result'] ?? 'all';
+        echo '<form class="filter-card" method="get"><input type="hidden" name="module" value="accounts"><input type="hidden" name="view" value="reconciliations"><div class="fc-grid">';
+        echo filter_field('From', '<input type="date" name="from" value="'.h($from).'">');
+        echo filter_field('To', '<input type="date" name="to" value="'.h($to).'">');
+        $acctSel = '<select name="account_id"><option value="">All accounts</option>';
+        foreach ($allAccounts as $a) $acctSel .= '<option value="'.$a['id'].'">'.h($a['name']).'</option>';
+        $acctSel .= '</select>';
+        echo filter_field('Account', $acctSel);
+        $resSel = '<select name="result"><option value="all">All</option><option value="none">Matched</option><option value="over">Over</option><option value="short">Short</option></select>';
+        echo filter_field('Result', $resSel);
+        echo filter_field('Rows', '<select name="rows"><option>50</option><option>100</option><option>200</option></select>');
+        echo '</div><div class="fc-actions"><button class="button primary" type="submit">▽ Apply</button><a class="button" href="?module=accounts&view=reconciliations">Reset</a></div></form>';
+
+        // New reconciliation mini form
+        echo '<section class="panel" style="margin-bottom:18px"><div class="panel-head"><div><div class="eyebrow">＋ NEW RECONCILIATION</div><h3>Reconcile an account</h3></div></div><div class="panel-body" style="padding:18px">';
+        echo '<form method="post" class="modal-grid"><input type="hidden" name="csrf" value="'.h(csrf()).'"><input type="hidden" name="action" value="reconcile">';
+        echo '<label class="field">Account<select name="account_id" required><option value="">Select account...</option>';
+        foreach ($allAccounts as $a) echo '<option value="'.$a['id'].'">'.h($a['name']).' — '.money($a['balance']).'</option>';
+        echo '</select></label>';
+        echo inp('period_start', 'Period start', $from, 'date');
+        echo inp('period_end', 'Period end', $to, 'date');
+        echo inp('actual_balance', 'Actual balance (counted cash)', '', 'number', true);
+        echo area('notes', 'Note', '', 'full');
+        echo '<div class="form-actions" style="grid-column:1/-1;margin-top:8px"><button class="button primary" type="submit">✓ Confirm Reconciliation</button></div>';
+        echo '</form></div></section>';
+
+        if (!$rrows) echo '<div class="empty">🗂 No reconciliations recorded.</div>';
+        else {
+            echo '<div class="tx-list"><table><thead><tr><th>Date</th><th>Account</th><th class="right">Previous/Opening</th><th class="right">Period In/Out</th><th class="right">Expected</th><th class="right">Actual</th><th class="right">Adjustment</th><th class="right">Final</th><th>Type/Status</th><th>By/Time</th><th>Note</th></tr></thead><tbody>';
+            foreach ($rrows as $r) {
+                $badge = $r['difference_type']==='over' ? '<span class="badge" style="background:#dcfce7;color:#166534">over</span>'
+                       : ($r['difference_type']==='short' ? '<span class="badge" style="background:#fee2e2;color:#991b1b">short</span>'
+                       : '<span class="badge" style="background:#e0e7ff;color:#3730a3">matched</span>');
+                echo '<tr><td>'.h(substr((string)$r['reconciliation_date'],0,10)).'</td>';
+                echo '<td class="name-cell">'.h($r['account_name']).'</td>';
+                echo '<td class="right muted">'.money($r['opening_balance']).'</td>';
+                echo '<td class="right"><span style="color:var(--green)">+'.money($r['transaction_in']).'</span><br><span style="color:var(--red)">-'.money($r['transaction_out']).'</span></td>';
+                echo '<td class="right">'.money($r['expected_balance']).'</td>';
+                echo '<td class="right" style="font-weight:700">'.money($r['actual_balance']).'</td>';
+                echo '<td class="right">'.money($r['adjustment_amount']?:0).'</td>';
+                echo '<td class="right" style="font-weight:700">'.money($r['final_reconciled_balance']).'</td>';
+                echo '<td>'.$badge.' '.badge($r['status']).'</td>';
+                echo '<td class="muted">'.h($r['created_by']).'<br>'.h(substr((string)$r['created_at'],0,16)).'</td>';
+                echo '<td class="muted">'.h($r['notes']).'</td></tr>';
+            }
+            echo '</tbody></table></div>';
+        }
+
+    // ----- Accounts hub (default) -----
+    else:
+        $acctId = (int)($_GET['account_id'] ?? 0);
+        if ($acctId) {
+            // simple ledger view for one account (all payments touching it)
+            $a = db()->prepare('SELECT * FROM accounts WHERE id=?'); $a->execute([$acctId]); $a = $a->fetch();
+            if ($a) {
+                money_page_hero('📒', 'Ledger · '.h($a['name']), 'All transactions posted to this account.');
+                $rows = db()->prepare("SELECT * FROM payments WHERE payment_account_id=? ORDER BY payment_date DESC LIMIT 200");
+                $rows->execute([$acctId]); $rows = $rows->fetchAll();
+                echo '<div class="cards two">';
+                kpi_card('Current Balance', money($a['balance']), $a['balance']<0?'rose':'green', channel_badge(account_channel($a)), '', '');
+                kpi_card('Transactions', (string)count($rows), 'indigo', 'Latest 200', '', '');
+                echo '</div>';
+                if (!$rows) echo '<div class="empty">No transactions on this account yet.</div>';
+                else {
+                    echo '<div class="tx-list"><table><thead><tr><th>Date</th><th>Party</th><th>Dir</th><th>Method</th><th class="right">Amount</th><th>Note</th></tr></thead><tbody>';
+                    foreach ($rows as $r) {
+                        echo '<tr><td>'.h(substr((string)$r['payment_date'],0,10)).'</td><td>'.h($r['party_name_snapshot']).'</td>';
+                        echo '<td>'.badge($r['direction']).'</td><td>'.badge($r['payment_mode']).'</td>';
+                        echo '<td class="right" style="font-weight:700;color:'.($r['direction']==='in'?'var(--green)':'var(--red)').'">'.money($r['amount']).'</td>';
+                        echo '<td class="muted">'.h($r['notes'] ?: $r['reference']).'</td></tr>';
+                    }
+                    echo '</tbody></table></div>';
+                }
+            }
+        } else {
+            // hub
+            money_page_hero('🏦', 'Accounts Dashboard', "Today's money movement, account balances, and quick actions.");
+            $todayIn = scalar("SELECT COALESCE(SUM(amount),0) FROM payments WHERE direction='in' AND date(payment_date)=date('now')");
+            $todayOut = scalar("SELECT COALESCE(SUM(amount),0) FROM payments WHERE direction='out' AND date(payment_date)=date('now')");
+            $todayExp = $todayOut;
+            $todayReceipts = scalar("SELECT COALESCE(SUM(paid_amount),0) FROM bookings WHERE date(booking_date)=date('now') AND status!='cancelled'") + scalar("SELECT COALESCE(SUM(total_paid_cache),0) FROM sales WHERE date(sale_date)=date('now') AND status!='cancelled'");
+            echo '<div class="cards four">';
+            kpi_card('👥 CLIENT PAYMENTS TODAY', money($todayIn), 'green', '', '?module=accounts&view=client-payments', 'View details →');
+            kpi_card('🚚 SUPPLIER PAYMENTS TODAY', money($todayOut), 'rose', '', '?module=accounts&view=supplier-payments', 'View details →');
+            kpi_card('🗂️ EXPENDITURES TODAY', money($todayExp), 'orange', '', '?module=accounts&view=expenditures', 'View details →');
+            kpi_card('🧾 RECEIPTS TODAY', money($todayReceipts), 'sky', '', '?module=accounts&view=receipts', 'View details →');
+            echo '</div>';
+            echo '<div class="cards">';
+            kpi_card('💰 TOTAL CASH AVAILABLE', money($cashTotal), 'purple', 'Sum of all active cash account balances.', '?module=accounts&view=total-cash', 'View cash & bank →');
+            kpi_card('🏢 TOTAL MONEY IN COMPANY', money($companyTotal), 'indigo', 'Sum of all active company accounts.', '?module=accounts&view=company-money', 'View company accounts →');
+            echo '</div>';
+
+            // Quick actions
+            echo '<section class="panel" style="margin-top:20px"><div class="panel-head"><div><div class="eyebrow">⚡ QUICK ACTIONS</div><h3>Money</h3></div></div><div class="quick-grid">';
+            $qa = [
+                ['?module=accounts&view=client-payments','👥','Client Payments','Money received from clients','green'],
+                ['?module=accounts&view=supplier-payments','🚚','Supplier Payments','Money paid to suppliers','red'],
+                ['?module=accounts&view=expenditures','🗂️','Expenditures','Personal & operating expenses','orange'],
+                ['?module=accounts&view=receipts','🧾',"Today's Receipts",'All cash inflow today','sky'],
+                ['?module=accounts','⚙️','Manage Accounts','Edit accounts & groups','indigo'],
+                ['?module=accounts&view=transfers','🔁','New Transfer','Move money between accounts','purple'],
+                ['?module=accounts&view=reconciliations','🕒','Reconciliations','Audit account balances','teal'],
+                ['?module=reports','💸','Cash Flow','Record spend/receive shows as derived','teal'],
+                ['?module=accounts&new=1','➕','Add Account','Create a new cash/bank account','green'],
+            ];
+            foreach ($qa as [$u,$ic,$t,$s,$c]) {
+                echo '<a href="'.h($u).'"><span class="qi" style="background:var(--'.$c.'-soft,#eef2ff);color:var(--'.$c.',#4f46e5)">'.$ic.'</span><span><b>'.h($t).'</b><small>'.h($s).'</small></span></a>';
+            }
+            echo '</div></section>';
+
+            // Account list table
+            $listRows = db()->query("SELECT * FROM accounts ORDER BY active DESC, name")->fetchAll();
+            echo '<section class="panel" style="margin-top:20px"><div class="panel-head"><div><div class="eyebrow">'.count($listRows).' ACCOUNTS</div><h3>Account Balances</h3></div><div><a class="button primary" href="?module=accounts&new=1">＋ Add Account</a></div></div>';
+            echo '<div class="table-wrap"><table><thead><tr><th>Account Name</th><th>Group</th><th>Type</th><th>Channel</th><th class="right">Balance</th><th>Status</th><th>Actions</th></tr></thead><tbody>';
+            foreach ($listRows as $r) {
+                $ch = account_channel($r);
+                $neg = $r['balance'] < 0;
+                echo '<tr><td class="name-cell">'.h($r['name']).'</td>';
+                echo '<td>'.group_badge(account_group($r)).'</td>';
+                echo '<td><span class="badge sub">'.h($r['account_type']).'</span></td>';
+                echo '<td>'.channel_badge($ch).'</td>';
+                echo '<td class="right" style="font-weight:800;color:'.($neg?'var(--red)':'var(--green)').'">'.money($r['balance']).'</td>';
+                echo '<td>'.badge($r['active']?'active':'disabled').'</td>';
+                echo '<td class="actions"><a href="?module=accounts&account_id='.$r['id'].'">Ledger</a> <a href="?module=accounts&edit='.$r['id'].'">Edit</a></td></tr>';
+            }
+            echo '</tbody></table></div></section>';
+        }
     endif;
-    toolbar('accounts', $search, 'New account');
-    $rows = db()->query("SELECT * FROM accounts ORDER BY active DESC, name")->fetchAll();
-    echo '<section class="panel"><div class="panel-head"><div><div class="eyebrow">' . count($rows) . ' RECORDS</div><h3>Accounts</h3></div></div><div class="table-wrap"><table><thead><tr><th>Name</th><th>Type</th><th class="right">Balance</th><th>Active</th><th></th></tr></thead><tbody>';
-    foreach ($rows as $r) {
-        echo '<tr><td class="name-cell">' . h($r['name']) . '</td><td>' . badge($r['account_type']) . '</td><td class="right">' . money($r['balance']) . '</td><td>' . badge($r['active'] ? 'active' : 'disabled') . '</td>';
-        actions('accounts', (int)$r['id'], false, true, true, 'Deactivate');
-        echo '</tr>';
-    }
-    echo '</tbody></table></div></section>';
 
 elseif ($key === 'users'):
     if ($isNew || $edit):
