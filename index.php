@@ -25,6 +25,12 @@ function check_csrf(): void {
 function money($n): string { return 'Rs ' . number_format((float)$n, 2); }
 function minor($n): int { return (int)round(((float)$n) * 100); }
 function num($v): float { return (float)str_replace(',', '', (string)($v ?? 0)); }
+function post(string $k, $default = null) { return $_POST[$k] ?? $default; }
+function post_date(string $k, string $time = ''): string {
+    $d = (string)($_POST[$k] ?? '');
+    if ($d === '') $d = date('Y-m-d');
+    return strlen($d) === 10 ? $d . $time : $d;
+}
 function flash(string $type, string $msg): void { $_SESSION['flash'] = [$type, $msg]; }
 function redirect(string $url): never { header('Location: ' . $url); exit; }
 function uid(): ?int { return isset($_SESSION['user']['id']) ? (int)$_SESSION['user']['id'] : null; }
@@ -231,10 +237,9 @@ function save_sale(): never {
     if (!in_array($saleType, ['cash', 'credit', 'booking', 'booking_credit'], true)) throw new RuntimeException('Invalid sale type.');
     $bookingId = in_array($saleType, ['booking', 'booking_credit'], true) ? (int)($_POST['booking_id'] ?? 0) : 0;
     if (in_array($saleType, ['booking', 'booking_credit'], true) && !$bookingId) throw new RuntimeException('Select the booking being dispatched.');
-    $date = $_POST['sale_date'] ?: date('Y-m-d');
-    if (strlen($date) === 10) $date .= ' ' . date('H:i:s');
+    $date = post_date('sale_date', ' ' . date('H:i:s'));
     $discount = max(0, num($_POST['discount'] ?? 0));
-    $payMethod = $_POST['payment_method'] ?: ($saleType === 'credit' ? 'credit' : 'cash');
+    $payMethod = post('payment_method') ?: ($saleType === 'credit' ? 'credit' : 'cash');
     if (!in_array($payMethod, ['cash', 'bank', 'credit'], true)) $payMethod = 'cash';
     $accountId = (int)($_POST['payment_account_id'] ?? 0) ?: null;
     $manual = trim((string)($_POST['manual_bill_no'] ?? ''));
@@ -251,7 +256,7 @@ function save_sale(): never {
         db()->beginTransaction();
         db()->prepare("INSERT INTO sales (auto_bill_no,manual_bill_no,client_id,sale_date,sale_type,booking_id,subtotal,subtotal_minor,discount,discount_minor,discount_reason,tax_amount,total_amount,total_amount_minor,total_paid_cache,total_paid_cache_minor,payment_method,payment_account_id,status,revision,created_by,notes)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,0,?,?,?,?,?,?, 'active',0,?,?)")
-            ->execute([$auto, $manual, $clientId, $date, $saleType, $bookingId ?: null, $subtotal, minor($subtotal), $discount, minor($discount), $_POST['discount_reason'] ?: null, $total, minor($total), $paid, minor($paid), $payMethod, $accountId, uid(), $_POST['notes'] ?: null]);
+            ->execute([$auto, $manual, $clientId, $date, $saleType, $bookingId ?: null, $subtotal, minor($subtotal), $discount, minor($discount), post('discount_reason') ?: null, $total, minor($total), $paid, minor($paid), $payMethod, $accountId, uid(), post('notes') ?: null]);
         $newId = (int)db()->lastInsertId();
         $ins = db()->prepare("INSERT INTO sale_items (sale_id,material_id,qty,rate,rate_minor,amount,amount_minor) VALUES (?,?,?,?,?,?,?)");
         foreach ($items as $it) {
@@ -273,7 +278,7 @@ function save_sale(): never {
     }
 
     db()->prepare("UPDATE sales SET client_id=?, sale_date=?, sale_type=?, booking_id=?, manual_bill_no=?, discount=?, discount_minor=?, discount_reason=?, payment_method=?, payment_account_id=?, notes=?, updated_by=? WHERE id=?")
-        ->execute([$clientId, $date, $saleType, $bookingId ?: null, $manual !== '' ? $manual : 'MB', $discount, minor($discount), $_POST['discount_reason'] ?: null, $payMethod, $accountId, $_POST['notes'] ?: null, uid(), $id]);
+        ->execute([$clientId, $date, $saleType, $bookingId ?: null, $manual !== '' ? $manual : 'MB', $discount, minor($discount), post('discount_reason') ?: null, $payMethod, $accountId, post('notes') ?: null, uid(), $id]);
     $row = db()->prepare('SELECT subtotal FROM sales WHERE id=?');
     $row->execute([$id]);
     $subtotal = (float)$row->fetchColumn();
@@ -288,8 +293,7 @@ function save_booking(): never {
     $id = (int)($_POST['id'] ?? 0);
     $clientId = (int)($_POST['client_id'] ?? 0);
     require_client($clientId);
-    $date = $_POST['booking_date'] ?: date('Y-m-d');
-    if (strlen($date) === 10) $date .= ' ' . date('H:i:s');
+    $date = post_date('booking_date', ' ' . date('H:i:s'));
     $discount = max(0, num($_POST['discount'] ?? 0));
     $paid = max(0, num($_POST['paid_amount'] ?? 0));
     $accountId = (int)($_POST['receive_in_account_id'] ?? 0) ?: null;
@@ -306,7 +310,7 @@ function save_booking(): never {
         db()->beginTransaction();
         db()->prepare("INSERT INTO bookings (auto_bill_no,manual_bill_no,client_id,booking_date,total_amount,total_amount_minor,paid_amount,paid_amount_minor,discount,discount_reason,receive_in_account_id,status,created_by,notes)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,'active',?,?)")
-            ->execute([$auto, $manual, $clientId, $date, $total, minor($total), $paid, minor($paid), $discount, $_POST['discount_reason'] ?: null, $accountId, uid(), $_POST['notes'] ?: null]);
+            ->execute([$auto, $manual, $clientId, $date, $total, minor($total), $paid, minor($paid), $discount, post('discount_reason') ?: null, $accountId, uid(), post('notes') ?: null]);
         $newId = (int)db()->lastInsertId();
         $ins = db()->prepare("INSERT INTO booking_items (booking_id,material_id,qty_booked,rate,rate_minor,amount,amount_minor) VALUES (?,?,?,?,?,?,?)");
         foreach ($items as $it) {
@@ -324,7 +328,7 @@ function save_booking(): never {
     }
 
     db()->prepare("UPDATE bookings SET client_id=?, booking_date=?, manual_bill_no=?, discount=?, discount_reason=?, receive_in_account_id=?, notes=?, updated_by=? WHERE id=?")
-        ->execute([$clientId, $date, $manual !== '' ? $manual : 'MB', $discount, $_POST['discount_reason'] ?: null, $accountId, $_POST['notes'] ?: null, uid(), $id]);
+        ->execute([$clientId, $date, $manual !== '' ? $manual : 'MB', $discount, post('discount_reason') ?: null, $accountId, post('notes') ?: null, uid(), $id]);
     flash('success', 'Booking updated.');
     redirect('?module=bookings&view=' . $id);
 }
@@ -333,15 +337,15 @@ function save_purchase(): never {
     $id = (int)($_POST['id'] ?? 0);
     $supplierId = (int)($_POST['supplier_id'] ?? 0);
     require_supplier($supplierId);
-    $date = $_POST['purchase_date'] ?: date('Y-m-d');
-    if (strlen($date) === 10) $date .= ' 00:00:00';
-    $billDate = $_POST['bill_date'] ?: $date;
-    $due = $_POST['due_date'] ?: null;
+    $date = post_date('purchase_date', ' 00:00:00');
+    $billDate = post('bill_date') ?: $date;
+    if (strlen((string)$billDate) === 10) $billDate .= ' 00:00:00';
+    $due = post('due_date') ?: null;
     $loading = max(0, num($_POST['loading_cost'] ?? 0));
     $freight = max(0, num($_POST['freight_cost'] ?? 0));
     $other = max(0, num($_POST['other_expense'] ?? 0));
     $discount = max(0, num($_POST['discount'] ?? 0));
-    $payType = $_POST['payment_type'] ?: 'credit';
+    $payType = post('payment_type') ?: 'credit';
     if (!in_array($payType, ['cash', 'bank', 'credit'], true)) $payType = 'credit';
     $accountId = (int)($_POST['payment_account_id'] ?? 0) ?: null;
     $manual = trim((string)($_POST['manual_bill_no'] ?? ''));
@@ -357,7 +361,7 @@ function save_purchase(): never {
         db()->beginTransaction();
         db()->prepare("INSERT INTO purchases (auto_bill_no,manual_bill_no,supplier_id,supplier_invoice_no,bill_date,purchase_date,due_date,subtotal,subtotal_minor,loading_cost,freight_cost,other_expense,discount,total_amount,total_amount_minor,paid_amount,paid_amount_minor,payment_type,payment_account_id,status,revision,created_by,notes)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,0,0,?,?, 'active',0,?,?)")
-            ->execute([$auto, $manual, $supplierId, $_POST['supplier_invoice_no'] ?: null, $billDate, $date, $due, $subtotal, minor($subtotal), $loading, $freight, $other, $discount, $total, minor($total), $payType, $accountId, uid(), $_POST['notes'] ?: null]);
+            ->execute([$auto, $manual, $supplierId, post('supplier_invoice_no') ?: null, $billDate, $date, $due, $subtotal, minor($subtotal), $loading, $freight, $other, $discount, $total, minor($total), $payType, $accountId, uid(), post('notes') ?: null]);
         $newId = (int)db()->lastInsertId();
         $ins = db()->prepare("INSERT INTO purchase_items (purchase_id,material_id,qty,rate,rate_minor,amount,amount_minor) VALUES (?,?,?,?,?,?,?)");
         foreach ($items as $it) {
@@ -374,7 +378,7 @@ function save_purchase(): never {
     }
 
     db()->prepare("UPDATE purchases SET supplier_id=?, supplier_invoice_no=?, bill_date=?, purchase_date=?, due_date=?, loading_cost=?, freight_cost=?, other_expense=?, discount=?, payment_type=?, payment_account_id=?, notes=?, updated_by=? WHERE id=?")
-        ->execute([$supplierId, $_POST['supplier_invoice_no'] ?: null, $billDate, $date, $due, $loading, $freight, $other, $discount, $payType, $accountId, $_POST['notes'] ?: null, uid(), $id]);
+        ->execute([$supplierId, post('supplier_invoice_no') ?: null, $billDate, $date, $due, $loading, $freight, $other, $discount, $payType, $accountId, post('notes') ?: null, uid(), $id]);
     flash('success', 'Purchase updated.');
     redirect('?module=purchases&view=' . $id);
 }
@@ -405,8 +409,7 @@ function save_payment(): never {
             default => $direction === 'in' ? 'sale' : 'other',
         };
     }
-    $date = $_POST['payment_date'] ?: date('Y-m-d');
-    if (strlen($date) === 10) $date .= ' ' . date('H:i:s');
+    $date = post_date('payment_date', ' ' . date('H:i:s'));
     $discount = max(0, num($_POST['discount'] ?? 0));
     $manual = trim((string)($_POST['manual_bill_no'] ?? ''));
     $snapshot = party_name($partyType, (int)$partyId) ?: ($_POST['party_name_snapshot'] ?? null);
@@ -422,14 +425,14 @@ function save_payment(): never {
         if ($manual === '') $manual = $auto;
         db()->prepare("INSERT INTO payments (auto_bill_no,manual_bill_no,payment_date,direction,party_type,party_id,party_name_snapshot,amount,amount_minor,discount,discount_minor,discount_reason,payment_mode,payment_account_id,account_name,reference,reference_type,created_by,notes)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            ->execute([$auto, $manual, $date, $direction, $partyType, $partyId, $snapshot, $amount, minor($amount), $discount, minor($discount), $_POST['discount_reason'] ?: null, $mode, $accountId, $accName, $_POST['reference'] ?: null, $refType, uid(), $_POST['notes'] ?: null]);
+            ->execute([$auto, $manual, $date, $direction, $partyType, $partyId, $snapshot, $amount, minor($amount), $discount, minor($discount), post('discount_reason') ?: null, $mode, $accountId, $accName, post('reference') ?: null, $refType, uid(), post('notes') ?: null]);
         audit('create', "Payment $auto $direction $amount");
         flash('success', "Payment $auto recorded.");
         redirect('?module=payments');
     }
 
     db()->prepare("UPDATE payments SET payment_date=?, direction=?, party_type=?, party_id=?, party_name_snapshot=?, amount=?, amount_minor=?, discount=?, discount_minor=?, payment_mode=?, payment_account_id=?, account_name=?, reference=?, reference_type=?, notes=?, updated_by=? WHERE id=?")
-        ->execute([$date, $direction, $partyType, $partyId, $snapshot, $amount, minor($amount), $discount, minor($discount), $mode, $accountId, $accName, $_POST['reference'] ?: null, $refType, $_POST['notes'] ?: null, uid(), $id]);
+        ->execute([$date, $direction, $partyType, $partyId, $snapshot, $amount, minor($amount), $discount, minor($discount), $mode, $accountId, $accName, post('reference') ?: null, $refType, post('notes') ?: null, uid(), $id]);
     flash('success', 'Payment updated.');
     redirect('?module=payments');
 }
@@ -449,8 +452,7 @@ function save_return(): never {
     if ($type === 'booking_return' && !$bookingItem) throw new RuntimeException('Booking returns need a booking item.');
     $refundReq = $type === 'cash_sale_return' && !empty($_POST['refund_required']) ? 1 : 0;
     $refundStatus = $refundReq ? (($_POST['refund_status'] ?? 'pending') === 'paid' ? 'paid' : 'pending') : 'not_applicable';
-    $date = $_POST['return_date'] ?: date('Y-m-d');
-    if (strlen($date) === 10) $date .= ' ' . date('H:i:s');
+    $date = post_date('return_date', ' ' . date('H:i:s'));
     $amt = $qty * $rate;
     $manual = trim((string)($_POST['manual_bill_no'] ?? ''));
 
@@ -459,13 +461,13 @@ function save_return(): never {
         if ($manual === '') $manual = $auto;
         db()->prepare("INSERT INTO returns (auto_bill_no,manual_bill_no,return_type,client_id,material_id,qty,rate,rate_minor,amount,amount_minor,refund_required,refund_status,return_date,booking_item_id,created_by,notes)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            ->execute([$auto, $manual, $type, $clientId, $materialId, $qty, $rate, minor($rate), $amt, minor($amt), $refundReq, $refundStatus, $date, $bookingItem, uid(), $_POST['notes'] ?: null]);
+            ->execute([$auto, $manual, $type, $clientId, $materialId, $qty, $rate, minor($rate), $amt, minor($amt), $refundReq, $refundStatus, $date, $bookingItem, uid(), post('notes') ?: null]);
         audit('create', "Return $auto");
         flash('success', "Return $auto saved.");
         redirect('?module=returns');
     }
     db()->prepare("UPDATE returns SET return_type=?, client_id=?, material_id=?, qty=?, rate=?, rate_minor=?, amount=?, amount_minor=?, refund_required=?, refund_status=?, return_date=?, notes=? WHERE id=?")
-        ->execute([$type, $clientId, $materialId, $qty, $rate, minor($rate), $amt, minor($amt), $refundReq, $refundStatus, $date, $_POST['notes'] ?: null, $id]);
+        ->execute([$type, $clientId, $materialId, $qty, $rate, minor($rate), $amt, minor($amt), $refundReq, $refundStatus, $date, post('notes') ?: null, $id]);
     flash('success', 'Return updated.');
     redirect('?module=returns');
 }
@@ -482,11 +484,11 @@ function save_pending_bill(): never {
     if (!$id) {
         db()->prepare("INSERT INTO pending_bills (client_id,client_name_snapshot,bill_no,bill_kind,transaction_type,amount,amount_minor,reason,is_paid,is_cash,notes,created_by)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?)")
-            ->execute([$clientId, $name, $_POST['bill_no'] ?: null, $kind, $_POST['transaction_type'] ?: null, $amount, minor($amount), $_POST['reason'] ?: null, $paid, $cash, $_POST['notes'] ?: null, uid()]);
+            ->execute([$clientId, $name, post('bill_no') ?: null, $kind, post('transaction_type') ?: null, $amount, minor($amount), post('reason') ?: null, $paid, $cash, post('notes') ?: null, uid()]);
         flash('success', 'Pending bill created.');
     } else {
         db()->prepare("UPDATE pending_bills SET client_id=?, client_name_snapshot=?, bill_no=?, bill_kind=?, transaction_type=?, amount=?, amount_minor=?, reason=?, is_paid=?, is_cash=?, notes=? WHERE id=?")
-            ->execute([$clientId, $name, $_POST['bill_no'] ?: null, $kind, $_POST['transaction_type'] ?: null, $amount, minor($amount), $_POST['reason'] ?: null, $paid, $cash, $_POST['notes'] ?: null, $id]);
+            ->execute([$clientId, $name, post('bill_no') ?: null, $kind, post('transaction_type') ?: null, $amount, minor($amount), post('reason') ?: null, $paid, $cash, post('notes') ?: null, $id]);
         flash('success', 'Pending bill updated.');
     }
     redirect('?module=pending_bills');
@@ -530,10 +532,10 @@ function save_client(): never {
     $active = isset($_POST['active']) ? 1 : 0;
     if (!$id) $active = 1;
     $fields = [
-        $code, $name, $_POST['phone'] ?: null, $_POST['cnic'] ?: null, $_POST['address'] ?: null, $_POST['location_url'] ?: null,
-        $cat, $type, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $_POST['book_no'] ?: null,
-        $_POST['financial_book_no'] ?: null, $_POST['financial_page'] ?: null, $_POST['cement_book_no'] ?: null, $_POST['cement_page'] ?: null,
-        $_POST['steel_book_no'] ?: null, $_POST['steel_page'] ?: null, $_POST['page_notes'] ?: null,
+        $code, $name, post('phone') ?: null, post('cnic') ?: null, post('address') ?: null, post('location_url') ?: null,
+        $cat, $type, $ob, minor($ob), post('opening_balance_date') ?: null, post('book_no') ?: null,
+        post('financial_book_no') ?: null, post('financial_page') ?: null, post('cement_book_no') ?: null, post('cement_page') ?: null,
+        post('steel_book_no') ?: null, post('steel_page') ?: null, post('page_notes') ?: null,
         !empty($_POST['require_manual_invoice']) ? 1 : 0, $active,
     ];
     if (!$id) {
@@ -562,11 +564,11 @@ function save_supplier(): never {
     if (!$id) {
         db()->prepare("INSERT INTO suppliers (code,name,phone,address,category_id,opening_balance,opening_balance_minor,opening_balance_date,active,created_by)
             VALUES (?,?,?,?,?,?,?,?,?,?)")
-            ->execute([$code, $name, $_POST['phone'] ?: null, $_POST['address'] ?: null, $cat, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $active, uid()]);
+            ->execute([$code, $name, post('phone') ?: null, post('address') ?: null, $cat, $ob, minor($ob), post('opening_balance_date') ?: null, $active, uid()]);
         flash('success', 'Supplier created.');
     } else {
         db()->prepare("UPDATE suppliers SET code=?, name=?, phone=?, address=?, category_id=?, opening_balance=?, opening_balance_minor=?, opening_balance_date=?, active=? WHERE id=?")
-            ->execute([$code, $name, $_POST['phone'] ?: null, $_POST['address'] ?: null, $cat, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $active, $id]);
+            ->execute([$code, $name, post('phone') ?: null, post('address') ?: null, $cat, $ob, minor($ob), post('opening_balance_date') ?: null, $active, $id]);
         flash('success', 'Supplier updated.');
     }
     redirect('?module=suppliers');
@@ -586,11 +588,11 @@ function save_delivery(): never {
     if (!$id) {
         db()->prepare("INSERT INTO delivery_persons (code,name,phone,linked_user_id,rate_per_trip,opening_balance,opening_balance_minor,opening_balance_date,active)
             VALUES (?,?,?,?,?,?,?,?,?)")
-            ->execute([$code, $name, $_POST['phone'] ?: null, $user, $rate, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $active]);
+            ->execute([$code, $name, post('phone') ?: null, $user, $rate, $ob, minor($ob), post('opening_balance_date') ?: null, $active]);
         flash('success', 'Delivery person created.');
     } else {
         db()->prepare("UPDATE delivery_persons SET code=?, name=?, phone=?, linked_user_id=?, rate_per_trip=?, opening_balance=?, opening_balance_minor=?, opening_balance_date=?, active=? WHERE id=?")
-            ->execute([$code, $name, $_POST['phone'] ?: null, $user, $rate, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $active, $id]);
+            ->execute([$code, $name, post('phone') ?: null, $user, $rate, $ob, minor($ob), post('opening_balance_date') ?: null, $active, $id]);
         flash('success', 'Delivery person updated.');
     }
     redirect('?module=delivery_persons');
@@ -602,10 +604,10 @@ function save_account(): never {
     if ($name === '') throw new RuntimeException('Account name is required.');
     $type = $_POST['account_type'] ?? 'other';
     if (!in_array($type, ['cash_drawer', 'bank', 'expense', 'revenue', 'loan', 'owner', 'other'], true)) $type = 'other';
-    $class = $_POST['account_class'] ?: null;
+    $class = post('account_class') ?: null;
     if ($class && !in_array($class, ['asset', 'liability', 'equity', 'income', 'expense'], true)) $class = null;
     $ob = num($_POST['opening_balance'] ?? 0);
-    $bank = $_POST['bank_name'] ?: null;
+    $bank = post('bank_name') ?: null;
     if ($type === 'bank' && !$bank) throw new RuntimeException('Bank accounts need a bank name.');
     $active = isset($_POST['active']) ? 1 : 0;
     if (!$id) $active = 1;
@@ -613,11 +615,11 @@ function save_account(): never {
     if (!$id) {
         db()->prepare("INSERT INTO accounts (name,account_type,account_class,category_id,bank_name,account_holder_name,account_number,branch_code,opening_balance,opening_balance_minor,opening_balance_date,balance,balance_minor,note,active)
             VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)")
-            ->execute([$name, $type, $class, $cat, $bank, $_POST['account_holder_name'] ?: null, $_POST['account_number'] ?: null, $_POST['branch_code'] ?: null, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $ob, minor($ob), $_POST['note'] ?: null, $active]);
+            ->execute([$name, $type, $class, $cat, $bank, post('account_holder_name') ?: null, post('account_number') ?: null, post('branch_code') ?: null, $ob, minor($ob), post('opening_balance_date') ?: null, $ob, minor($ob), post('note') ?: null, $active]);
         flash('success', 'Account created.');
     } else {
         db()->prepare("UPDATE accounts SET name=?, account_type=?, account_class=?, category_id=?, bank_name=?, account_holder_name=?, account_number=?, branch_code=?, opening_balance=?, opening_balance_minor=?, opening_balance_date=?, note=?, active=? WHERE id=?")
-            ->execute([$name, $type, $class, $cat, $bank, $_POST['account_holder_name'] ?: null, $_POST['account_number'] ?: null, $_POST['branch_code'] ?: null, $ob, minor($ob), $_POST['opening_balance_date'] ?: null, $_POST['note'] ?: null, $active, $id]);
+            ->execute([$name, $type, $class, $cat, $bank, post('account_holder_name') ?: null, post('account_number') ?: null, post('branch_code') ?: null, $ob, minor($ob), post('opening_balance_date') ?: null, post('note') ?: null, $active, $id]);
         flash('success', 'Account updated.');
     }
     redirect('?module=accounts');
@@ -640,11 +642,11 @@ function save_user(): never {
         if ($pass === '') throw new RuntimeException('Password is required for a new user.');
         db()->prepare("INSERT INTO users (username,password_hash,full_name,role_id,phone,email,status,restrict_backdated_edit,active)
             VALUES (?,?,?,?,?,?,?,?,?)")
-            ->execute([$username, password_hash($pass, PASSWORD_DEFAULT), $full, $role, $_POST['phone'] ?: null, $_POST['email'] ?: null, $status, $restrict, $active]);
+            ->execute([$username, password_hash($pass, PASSWORD_DEFAULT), $full, $role, post('phone') ?: null, post('email') ?: null, $status, $restrict, $active]);
         flash('success', 'User created.');
     } else {
         db()->prepare("UPDATE users SET username=?, full_name=?, role_id=?, phone=?, email=?, status=?, restrict_backdated_edit=?, active=? WHERE id=?")
-            ->execute([$username, $full, $role, $_POST['phone'] ?: null, $_POST['email'] ?: null, $status, $restrict, $active, $id]);
+            ->execute([$username, $full, $role, post('phone') ?: null, post('email') ?: null, $status, $restrict, $active, $id]);
         if ($pass !== '') db()->prepare('UPDATE users SET password_hash=? WHERE id=?')->execute([password_hash($pass, PASSWORD_DEFAULT), $id]);
         flash('success', 'User updated.');
     }
@@ -654,9 +656,9 @@ function save_user(): never {
 function save_settings(): never {
     db()->prepare("UPDATE settings SET company_name=?, company_address=?, company_phone=?, company_email=?, currency=?, currency_symbol=?, tax_rate=?, invoice_prefix=?, bill_prefix=?, backdate_grace_days=?, allow_global_negative_stock=?, low_stock_alert_enabled=?, updated_by=? WHERE id=1")
         ->execute([
-            $_POST['company_name'] ?: null, $_POST['company_address'] ?: null, $_POST['company_phone'] ?: null, $_POST['company_email'] ?: null,
-            $_POST['currency'] ?: 'PKR', $_POST['currency_symbol'] ?: 'Rs', num($_POST['tax_rate'] ?? 0),
-            $_POST['invoice_prefix'] ?: 'INV', $_POST['bill_prefix'] ?: 'B', (int)($_POST['backdate_grace_days'] ?? 0),
+            post('company_name') ?: null, post('company_address') ?: null, post('company_phone') ?: null, post('company_email') ?: null,
+            post('currency') ?: 'PKR', post('currency_symbol') ?: 'Rs', num($_POST['tax_rate'] ?? 0),
+            post('invoice_prefix') ?: 'INV', post('bill_prefix') ?: 'B', (int)($_POST['backdate_grace_days'] ?? 0),
             !empty($_POST['allow_global_negative_stock']) ? 1 : 0, !empty($_POST['low_stock_alert_enabled']) ? 1 : 0, uid(),
         ]);
     flash('success', 'Settings saved.');
