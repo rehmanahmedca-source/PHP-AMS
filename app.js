@@ -251,17 +251,78 @@
   }
 
   function refreshClientMeta() {
-    const box = document.getElementById('client-meta');
-    if (!box) return;
+    const box = document.getElementById('client-overview');
+    const oldBox = document.getElementById('client-meta');
+    if (!box && !oldBox) return;
     const id = currentClientId();
     const c = findItem('clients', id);
-    if (!c) { box.classList.add('hidden'); box.innerHTML = ''; return; }
-    box.classList.remove('hidden');
-    const bal = Number(c.balance || 0);
-    box.innerHTML = `<span>Code <b>${escapeHtml(c.code || '—')}</b></span>
-      <span>Default <b>${escapeHtml(c.default_type || 'cash')}</b></span>
-      <span class="${bal > 0 ? 'owed' : ''}">Balance <b>${money(bal)}</b></span>
-      ${c.phone ? `<span>Phone <b>${escapeHtml(c.phone)}</b></span>` : ''}`;
+    
+    // Show basic meta in old box if it exists
+    if (oldBox) {
+      if (!c) { oldBox.classList.add('hidden'); oldBox.innerHTML = ''; }
+      else {
+        oldBox.classList.remove('hidden');
+        const bal = Number(c.balance || 0);
+        oldBox.innerHTML = `<span>Code <b>${escapeHtml(c.code || '—')}</b></span>
+          <span>Default <b>${escapeHtml(c.default_type || 'cash')}</b></span>
+          <span class="${bal > 0 ? 'owed' : ''}">Balance <b>${money(bal)}</b></span>
+          ${c.phone ? `<span>Phone <b>${escapeHtml(c.phone)}</b></span>` : ''}`;
+      }
+    }
+    
+    // Load full client overview (bookings + balance) into new box
+    if (box) {
+      if (!id) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+      box.classList.remove('hidden');
+      box.innerHTML = '<div class="co-loading"><span class="co-spinner"></span> Loading client bookings & balance…</div>';
+      
+      fetch(`?ajax=client_overview&client_id=${encodeURIComponent(id)}`)
+        .then(r => r.json())
+        .then(d => {
+          let html = `<div class="co-header">
+            <div class="co-balance"><span class="co-label">Client Balance</span><strong class="${d.balance > 0 ? 'owed' : ''}">${money(d.balance)}</strong></div>
+            <div class="co-count"><span class="co-label">Open Bookings</span><strong>${(d.bookings || []).length}</strong></div>
+          </div>`;
+          
+          if (d.bookings && d.bookings.length > 0) {
+            html += '<div class="co-bookings">';
+            d.bookings.forEach(b => {
+              const outstanding = Number(b.outstanding || 0);
+              html += `<div class="co-booking">
+                <div class="co-booking-head">
+                  <div>
+                    <b>${escapeHtml(b.manual_bill_no || b.auto_bill_no)}</b>
+                    <small>${escapeHtml(b.auto_bill_no)} · ${escapeHtml((b.booking_date || '').substring(0, 10))}</small>
+                  </div>
+                  <div class="co-booking-amounts">
+                    <span class="co-total">Total: ${money(b.total_amount)}</span>
+                    <span class="co-paid">Paid: ${money(b.paid_amount)}</span>
+                    <span class="co-outstanding ${outstanding > 0 ? 'owed' : ''}">Due: ${money(outstanding)}</span>
+                  </div>
+                </div>`;
+              if (b.items && b.items.length > 0) {
+                html += '<div class="co-items">';
+                b.items.forEach(item => {
+                  const pending = Number(item.qty_pending || 0);
+                  html += `<div class="co-item">
+                    <span class="co-item-name">${escapeHtml(item.material_name)}</span>
+                    <span class="co-item-detail">Booked: ${item.qty_booked} ${escapeHtml(item.unit || '')}</span>
+                    <span class="co-item-detail">Dispatched: ${item.qty_dispatched}</span>
+                    <span class="co-item-pending ${pending > 0 ? 'owed' : ''}">Pending: ${pending}</span>
+                  </div>`;
+                });
+                html += '</div>';
+              }
+              html += '</div>';
+            });
+            html += '</div>';
+          } else {
+            html += '<div class="co-empty">No open bookings for this client.</div>';
+          }
+          box.innerHTML = html;
+        })
+        .catch(() => { box.innerHTML = '<div class="co-empty">Could not load client details.</div>'; });
+    }
   }
 
   function toggleSaleType() {
