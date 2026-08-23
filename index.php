@@ -964,25 +964,26 @@ function form_start(string $title, string $sub, string $mod, $edit): void {
 function form_end(string $mod, string $save = 'Save'): void {
     echo '<div class="form-actions"><a class="button" href="?module=' . h($mod) . '">Cancel</a><button class="button primary">' . h($save) . '</button></div></form></section>';
 }
-function section(string $title): void { echo '<div class="form-section"><h4>' . h($title) . '</h4><div class="form-grid">'; }
+function section(string $title, string $cls = ''): void { echo '<div class="form-section' . ($cls ? ' ' . h($cls) : '') . '"><h4>' . h($title) . '</h4><div class="form-grid">'; }
 function section_end(): void { echo '</div></div>'; }
+function section_no_grid(string $title, string $cls = ''): void { echo '<div class="form-section' . ($cls ? ' ' . h($cls) : '') . '"><h4>' . h($title) . '</h4>'; }
 function lines_editor(bool $showExtras = false): void {
-    echo '<div class="form-section"><h4>Materials</h4><p class="hint">Search a material by name or code. Rate fills from the last sale when available.</p>';
-    echo '<div class="lines-wrap"><table class="lines"><thead><tr><th>Material</th><th style="width:110px">Qty</th><th style="width:130px">Rate</th><th style="width:130px" class="right">Amount</th><th style="width:40px"></th></tr></thead><tbody id="line-body"></tbody></table></div>';
-    echo '<div style="margin-top:10px"><button type="button" class="button" id="add-line">＋ Add material</button></div>';
-    echo '<div class="totals"><div><span>Subtotal</span><strong id="sum-subtotal">Rs 0.00</strong></div>';
+    echo '<p class="hint" style="padding:14px 18px 0">Search a material by name or code. Rate fills from the last sale when available.</p>';
+    echo '<div class="lines-wrap" style="padding:10px 18px 0"><table class="lines"><thead><tr><th>Material</th><th style="width:110px">Qty</th><th style="width:130px">Rate</th><th style="width:130px" class="right">Amount</th><th style="width:40px"></th></tr></thead><tbody id="line-body"></tbody></table></div>';
+    echo '<div style="margin-top:10px;padding:0 18px"><button type="button" class="button" id="add-line">＋ Add material</button></div>';
+    echo '<div class="totals" style="margin:16px 18px 16px auto"><div><span>Subtotal</span><strong id="sum-subtotal">Rs 0.00</strong></div>';
     if ($showExtras) {
         echo '<div><span>Loading</span><input type="number" step="0.01" min="0" name="loading_cost" value="' . h($_POST['loading_cost'] ?? '0') . '"></div>';
         echo '<div><span>Freight</span><input type="number" step="0.01" min="0" name="freight_cost" value="0"></div>';
         echo '<div><span>Other</span><input type="number" step="0.01" min="0" name="other_expense" value="0"></div>';
     }
     echo '<div><span>Discount</span><input type="number" step="0.01" min="0" name="discount" value="' . h((string)($GLOBALS['record']['discount'] ?? 0)) . '"></div>';
-    echo '<div class="grand"><span>Total</span><strong id="sum-total">Rs 0.00</strong></div></div></div>';
+    echo '<div class="grand"><span>Total</span><strong id="sum-total">Rs 0.00</strong></div></div>';
 }
 
 function existing_items_table(array $rows, array $cols): void {
     if (!$rows) return;
-    echo '<div class="form-section"><h4>Existing line items</h4><div class="table-wrap"><table><thead><tr>';
+    echo '<div class="form-section sec-items"><h4>📋 Existing line items</h4><div class="table-wrap"><table><thead><tr>';
     foreach ($cols as $c) echo '<th>' . h($c) . '</th>';
     echo '</tr></thead><tbody>';
     foreach ($rows as $r) {
@@ -994,7 +995,7 @@ function existing_items_table(array $rows, array $cols): void {
         }
         echo '</tr>';
     }
-    echo '</tbody></table></div><p class="hint">Line items stay as posted. Create a new bill to add a fresh set of materials.</p></div>';
+    echo '</tbody></table></div><p class="hint" style="padding:8px 18px 14px">Line items stay as posted. Create a new bill to add a fresh set of materials.</p></div>';
 }
 
 function toolbar(string $mod, string $q, string $addLabel): void {
@@ -1399,31 +1400,37 @@ elseif ($key === 'sales'):
     <?php else:
         if ($isNew || $edit):
             form_start($edit ? 'Update sale' : 'Create sale', 'Search the client and materials by name. Totals calculate as you type.', 'sales', $edit);
-            section('Customer');
+            section('👤 Customer Details', 'sec-customer');
             echo combo('client_id', 'clients', 'Client', $record['client_id'] ?? '', true, 'Search client name or code…');
-            echo '</div><div id="client-meta" class="client-meta hidden"></div><div class="form-grid">';
             echo inp('sale_date', 'Sale date', substr((string)($record['sale_date'] ?? date('Y-m-d')), 0, 10), 'date', true);
             echo sel('sale_type', 'Sale type', $record['sale_type'] ?? 'cash', ['cash' => 'Cash', 'credit' => 'Credit', 'booking' => 'Booking dispatch', 'booking_credit' => 'Booking credit']);
             echo inp('manual_bill_no', 'Manual bill no', $record['manual_bill_no'] ?? '');
             section_end();
-            echo '<div class="form-section' . (in_array($record['sale_type'] ?? '', ['booking', 'booking_credit'], true) ? '' : ' hidden') . '" id="booking-wrap">';
-            echo '<h4>Booking dispatch</h4><div class="form-grid">';
+            echo '<div id="client-meta" class="client-meta hidden" style="margin:0 0 16px"></div>';
+            echo '<div class="form-section' . (in_array($record['sale_type'] ?? '', ['booking', 'booking_credit'], true) ? ' sec-delivery' : ' hidden') . '" id="booking-wrap">';
+            echo '<h4>🔗 Booking dispatch</h4><div class="form-grid">';
             echo combo('booking_id', 'bookings', 'Booking', $record['booking_id'] ?? '', false, 'Search booking bill…');
             echo '</div><div id="booking-panel" class="booking-panel" style="margin-top:10px"><div class="eyebrow">BOOKING FULFILLMENT</div><h4>What is still pending</h4><p id="booking-empty">Choose a client and booking. Remaining quantities appear here.</p><div id="booking-result"></div></div></div>';
-            if (!$edit) lines_editor(false);
-            else {
+            if (!$edit) {
+                echo '<div class="form-section sec-items"><h4>📦 Materials / Line Items</h4>';
+                lines_editor(false);
+                echo '</div>';
+            } else {
                 $rows = item_rows('sale_items', 'sale_id', $edit);
                 existing_items_table($rows, ['material_name' => 'Material', 'qty' => 'Qty', 'rate' => 'Rate', 'amount' => 'Amount']);
-                echo '<div class="form-section"><div class="form-grid">';
+                section_no_grid('💰 Discount', 'sec-payment');
+                echo '<div class="form-grid">';
                 echo inp('discount', 'Discount', $record['discount'] ?? 0, 'number');
+                echo inp('discount_reason', 'Discount reason', $record['discount_reason'] ?? '');
                 echo '</div></div>';
             }
-            section('Payment & delivery');
+            section('💳 Payment & Delivery', 'sec-payment');
             echo sel('payment_method', 'Payment method', $record['payment_method'] ?? 'cash', ['' => '—', 'cash' => 'Cash', 'bank' => 'Bank', 'credit' => 'Credit']);
             echo '<div id="account-wrap">' . combo('payment_account_id', 'accounts', 'Account', $record['payment_account_id'] ?? '', false, 'Search account…') . '</div>';
             echo combo('delivery_person_id', 'deliveries', 'Delivery person', '', false, 'Search driver…');
-            echo inp('discount_reason', 'Discount reason', $record['discount_reason'] ?? '');
-            echo area('notes', 'Notes', $record['notes'] ?? '');
+            section_end();
+            section('📝 Notes', 'sec-notes');
+            echo area('notes', 'Notes', $record['notes'] ?? '', 'span-3');
             section_end();
             form_end('sales', $edit ? 'Update sale' : 'Save sale');
         endif;
@@ -1465,18 +1472,25 @@ elseif ($key === 'bookings'):
     <?php else:
         if ($isNew || $edit):
             form_start($edit ? 'Update booking' : 'Create booking', 'Book material against a client. Dispatch later from Sales → Booking.', 'bookings', $edit);
-            section('Customer');
+            section('👤 Customer Details', 'sec-customer');
             echo combo('client_id', 'clients', 'Client', $record['client_id'] ?? '', true, 'Search client…');
             echo inp('booking_date', 'Booking date', substr((string)($record['booking_date'] ?? date('Y-m-d')), 0, 10), 'date', true);
             echo inp('manual_bill_no', 'Manual bill no', $record['manual_bill_no'] ?? '');
             section_end();
-            if (!$edit) lines_editor(false);
-            else existing_items_table(item_rows('booking_items', 'booking_id', $edit), ['material_name' => 'Material', 'qty_booked' => 'Booked', 'qty_dispatched' => 'Dispatched', 'rate' => 'Rate', 'amount' => 'Amount']);
-            section('Payment');
+            if (!$edit) {
+                echo '<div class="form-section sec-items"><h4>📦 Materials / Line Items</h4>';
+                lines_editor(false);
+                echo '</div>';
+            } else {
+                existing_items_table(item_rows('booking_items', 'booking_id', $edit), ['material_name' => 'Material', 'qty_booked' => 'Booked', 'qty_dispatched' => 'Dispatched', 'rate' => 'Rate', 'amount' => 'Amount']);
+            }
+            section('💳 Payment', 'sec-payment');
             echo inp('paid_amount', 'Amount received now', $record['paid_amount'] ?? 0, 'number');
             echo combo('receive_in_account_id', 'accounts', 'Receive in account', $record['receive_in_account_id'] ?? '', false, 'Search account…');
             echo inp('discount_reason', 'Discount reason', $record['discount_reason'] ?? '');
-            echo area('notes', 'Notes', $record['notes'] ?? '');
+            section_end();
+            section('📝 Notes', 'sec-notes');
+            echo area('notes', 'Notes', $record['notes'] ?? '', 'span-3');
             section_end();
             form_end('bookings', $edit ? 'Update booking' : 'Save booking');
         endif;
@@ -1545,7 +1559,7 @@ elseif ($key === 'purchases'):
     <?php else:
         if ($isNew || $edit):
             form_start($edit ? 'Update purchase' : 'Record purchase / GRN', 'Search the supplier and materials. New stock batches are created automatically.', 'purchases', $edit);
-            section('Supplier');
+            section('🏭 Supplier Details', 'sec-customer');
             echo combo('supplier_id', 'suppliers', 'Supplier', $record['supplier_id'] ?? '', true, 'Search supplier…');
             echo inp('purchase_date', 'Purchase date', substr((string)($record['purchase_date'] ?? date('Y-m-d')), 0, 10), 'date', true);
             echo inp('bill_date', 'Bill date', substr((string)($record['bill_date'] ?? date('Y-m-d')), 0, 10), 'date');
@@ -1553,12 +1567,19 @@ elseif ($key === 'purchases'):
             echo inp('manual_bill_no', 'Manual GRN no', $record['manual_bill_no'] ?? '');
             echo inp('supplier_invoice_no', 'Supplier invoice', $record['supplier_invoice_no'] ?? '');
             section_end();
-            if (!$edit) lines_editor(true);
-            else existing_items_table(item_rows('purchase_items', 'purchase_id', $edit), ['material_name' => 'Material', 'qty' => 'Qty', 'rate' => 'Rate', 'amount' => 'Amount']);
-            section('Payment');
+            if (!$edit) {
+                echo '<div class="form-section sec-items"><h4>📦 Materials / Line Items</h4>';
+                lines_editor(true);
+                echo '</div>';
+            } else {
+                existing_items_table(item_rows('purchase_items', 'purchase_id', $edit), ['material_name' => 'Material', 'qty' => 'Qty', 'rate' => 'Rate', 'amount' => 'Amount']);
+            }
+            section('💳 Payment', 'sec-payment');
             echo sel('payment_type', 'Payment type', $record['payment_type'] ?? 'credit', ['credit' => 'Credit', 'cash' => 'Cash', 'bank' => 'Bank']);
             echo combo('payment_account_id', 'accounts', 'Account', $record['payment_account_id'] ?? '', false, 'Search account…');
-            echo area('notes', 'Notes', $record['notes'] ?? '');
+            section_end();
+            section('📝 Notes', 'sec-notes');
+            echo area('notes', 'Notes', $record['notes'] ?? '', 'span-3');
             section_end();
             form_end('purchases', $edit ? 'Update purchase' : 'Save purchase');
         endif;
@@ -1577,16 +1598,18 @@ elseif ($key === 'purchases'):
 elseif ($key === 'payments'):
     if ($isNew || $edit):
         form_start($edit ? 'Update payment' : 'Record payment', 'Choose the party from the searchable list. Bank payments need an account.', 'payments', $edit);
-        section('Payment');
+        section('💸 Payment Details', 'sec-payment');
         echo inp('payment_date', 'Date', substr((string)($record['payment_date'] ?? date('Y-m-d')), 0, 10), 'date', true);
         echo sel('direction', 'Direction', $record['direction'] ?? 'in', ['in' => 'Money in', 'out' => 'Money out']);
-        echo sel('party_type', 'Party type', $record['party_type'] ?? 'client', ['client' => 'Client', 'supplier' => 'Supplier', 'delivery_person' => 'Delivery person', 'lender' => 'Lender', 'owner' => 'Owner', 'other' => 'Other']);
-        echo combo('party_id', 'parties', 'Party name', $record['party_id'] ?? '', true, 'Search name…');
         echo inp('amount', 'Amount', $record['amount'] ?? '', 'number', true);
         echo inp('discount', 'Discount / waive', $record['discount'] ?? 0, 'number');
         echo inp('manual_bill_no', 'Manual slip no', $record['manual_bill_no'] ?? '');
         section_end();
-        section('Account');
+        section('👤 Party Details', 'sec-customer');
+        echo sel('party_type', 'Party type', $record['party_type'] ?? 'client', ['client' => 'Client', 'supplier' => 'Supplier', 'delivery_person' => 'Delivery person', 'lender' => 'Lender', 'owner' => 'Owner', 'other' => 'Other']);
+        echo combo('party_id', 'parties', 'Party name', $record['party_id'] ?? '', true, 'Search name…');
+        section_end();
+        section('🏦 Account & Reference', 'sec-delivery');
         echo sel('payment_mode', 'Mode', $record['payment_mode'] ?? 'cash', ['cash' => 'Cash', 'bank' => 'Bank', 'adjustment' => 'Adjustment']);
         echo combo('payment_account_id', 'accounts', 'Account', $record['payment_account_id'] ?? '', false, 'Search account…');
         echo sel('reference_type', 'Reference', $record['reference_type'] ?? 'sale', [
@@ -1597,7 +1620,9 @@ elseif ($key === 'payments'):
             'owner_contribution' => 'Owner contribution', 'other' => 'Other',
         ]);
         echo inp('reference', 'Reference note', $record['reference'] ?? '');
-        echo area('notes', 'Notes', $record['notes'] ?? '');
+        section_end();
+        section('📝 Notes', 'sec-notes');
+        echo area('notes', 'Notes', $record['notes'] ?? '', 'span-3');
         section_end();
         form_end('payments', $edit ? 'Update payment' : 'Save payment');
     endif;
@@ -1616,7 +1641,7 @@ elseif ($key === 'payments'):
 elseif ($key === 'returns'):
     if ($isNew || $edit):
         form_start($edit ? 'Update return' : 'Record return', 'Use the correct return type. Booking returns need a booking item id.', 'returns', $edit);
-        section('Return');
+        section('↩️ Return Details', 'sec-customer');
         echo combo('client_id', 'clients', 'Client', $record['client_id'] ?? '', true, 'Search client…');
         echo combo('material_id', 'materials', 'Material', $record['material_id'] ?? '', true, 'Search material…');
         echo sel('return_type', 'Return type', $record['return_type'] ?? 'cash_sale_return', ['cash_sale_return' => 'Cash sale return', 'credit_sale_return' => 'Credit sale return', 'booking_return' => 'Booking return']);
@@ -1625,9 +1650,13 @@ elseif ($key === 'returns'):
         echo inp('rate', 'Rate', $record['rate'] ?? '', 'number');
         echo inp('manual_bill_no', 'Manual bill no', $record['manual_bill_no'] ?? '');
         echo inp('booking_item_id', 'Booking item id', $record['booking_item_id'] ?? '', 'number');
+        section_end();
+        section('💰 Refund', 'sec-payment');
         echo chk('refund_required', 'Refund required (cash returns only)', $record['refund_required'] ?? 0);
         echo sel('refund_status', 'Refund status', $record['refund_status'] ?? 'not_applicable', ['not_applicable' => 'Not applicable', 'pending' => 'Pending', 'paid' => 'Paid']);
-        echo area('notes', 'Notes', $record['notes'] ?? '');
+        section_end();
+        section('📝 Notes', 'sec-notes');
+        echo area('notes', 'Notes', $record['notes'] ?? '', 'span-3');
         section_end();
         form_end('returns', $edit ? 'Update return' : 'Save return');
     endif;
@@ -1645,16 +1674,20 @@ elseif ($key === 'returns'):
 elseif ($key === 'pending_bills'):
     if ($isNew || $edit):
         form_start($edit ? 'Update pending bill' : 'Add pending bill', 'Collections queue. Mark paid when the customer settles.', 'pending_bills', $edit);
-        section('Bill');
+        section('📄 Bill Details', 'sec-customer');
         echo combo('client_id', 'clients', 'Client', $record['client_id'] ?? '', false, 'Search client…');
         echo inp('bill_no', 'Bill no', $record['bill_no'] ?? '');
         echo sel('bill_kind', 'Kind', $record['bill_kind'] ?? 'other', ['sale' => 'Sale', 'booking' => 'Booking', 'grn' => 'GRN', 'refund' => 'Refund', 'other' => 'Other']);
         echo inp('amount', 'Amount', $record['amount'] ?? '', 'number', true);
         echo inp('reason', 'Reason', $record['reason'] ?? '');
         echo inp('transaction_type', 'Transaction type', $record['transaction_type'] ?? '');
+        section_end();
+        section('✅ Status', 'sec-payment');
         echo chk('is_paid', 'Paid', $record['is_paid'] ?? 0);
         echo chk('is_cash', 'Cash', $record['is_cash'] ?? 0);
-        echo area('notes', 'Notes', $record['notes'] ?? '');
+        section_end();
+        section('📝 Notes', 'sec-notes');
+        echo area('notes', 'Notes', $record['notes'] ?? '', 'span-3');
         section_end();
         form_end('pending_bills');
     endif;
@@ -1675,7 +1708,7 @@ elseif ($key === 'pending_bills'):
 elseif ($key === 'materials'):
     if ($isNew || $edit):
         form_start($edit ? 'Update material' : 'Add material', 'Code is generated if you leave it blank. Name must be unique inside a category.', 'materials', $edit);
-        section('Material');
+        section('📦 Material Details', 'sec-items');
         echo inp('code', 'Code', $record['code'] ?? '', 'text', false, 'placeholder="Auto if empty"');
         echo inp('name', 'Name', $record['name'] ?? '', 'text', true);
         echo inp('unit', 'Unit', $record['unit'] ?? 'Bags', 'text', true);
@@ -1699,7 +1732,7 @@ elseif ($key === 'materials'):
 elseif ($key === 'clients'):
     if ($isNew || $edit):
         form_start($edit ? 'Update client' : 'Add client', 'Name is required. Code is generated if left blank. Book pages stay together at the bottom.', 'clients', $edit);
-        section('Identity');
+        section('👤 Identity', 'sec-customer');
         echo inp('code', 'Code', $record['code'] ?? '', 'text', false, 'placeholder="Auto if empty"');
         echo inp('name', 'Name', $record['name'] ?? '', 'text', true);
         echo inp('phone', 'Phone', $record['phone'] ?? '');
@@ -1707,17 +1740,17 @@ elseif ($key === 'clients'):
         echo cat_opts('client', $record['category_id'] ?? '');
         echo sel('default_type', 'Default sale type', $record['default_type'] ?? 'cash', ['cash' => 'Cash', 'credit' => 'Credit', 'booking' => 'Booking']);
         section_end();
-        section('Address');
+        section('📍 Address', 'sec-delivery');
         echo area('address', 'Address', $record['address'] ?? '', 'span-2');
         echo inp('location_url', 'Location URL', $record['location_url'] ?? '');
         section_end();
-        section('Opening balance');
+        section('💰 Opening Balance', 'sec-payment');
         echo inp('opening_balance', 'Opening balance', $record['opening_balance'] ?? 0, 'number');
         echo inp('opening_balance_date', 'As of', substr((string)($record['opening_balance_date'] ?? ''), 0, 10), 'date');
         echo chk('require_manual_invoice', 'Require manual invoice', $record['require_manual_invoice'] ?? 0);
         if ($edit) echo chk('active', 'Active', $record['active'] ?? 1);
         section_end();
-        section('Khata / book pages');
+        section('📒 Khata / Book Pages', 'sec-notes');
         echo inp('book_no', 'Book no', $record['book_no'] ?? '');
         echo inp('financial_book_no', 'Financial book', $record['financial_book_no'] ?? '');
         echo inp('financial_page', 'Financial page', $record['financial_page'] ?? '');
@@ -1725,7 +1758,7 @@ elseif ($key === 'clients'):
         echo inp('cement_page', 'Cement page', $record['cement_page'] ?? '');
         echo inp('steel_book_no', 'Steel book', $record['steel_book_no'] ?? '');
         echo inp('steel_page', 'Steel page', $record['steel_page'] ?? '');
-        echo area('page_notes', 'Page notes', $record['page_notes'] ?? '');
+        echo area('page_notes', 'Page notes', $record['page_notes'] ?? '', 'span-3');
         section_end();
         form_end('clients');
     endif;
@@ -1742,15 +1775,19 @@ elseif ($key === 'clients'):
 elseif ($key === 'suppliers'):
     if ($isNew || $edit):
         form_start($edit ? 'Update supplier' : 'Add supplier', 'Used on purchases / GRN.', 'suppliers', $edit);
-        section('Supplier');
+        section('🏭 Supplier', 'sec-customer');
         echo inp('code', 'Code', $record['code'] ?? '', 'text', false, 'placeholder="Auto if empty"');
         echo inp('name', 'Name', $record['name'] ?? '', 'text', true);
         echo inp('phone', 'Phone', $record['phone'] ?? '');
         echo cat_opts('account', $record['category_id'] ?? '');
+        section_end();
+        section('💰 Opening Balance', 'sec-payment');
         echo inp('opening_balance', 'Opening balance', $record['opening_balance'] ?? 0, 'number');
         echo inp('opening_balance_date', 'As of', substr((string)($record['opening_balance_date'] ?? ''), 0, 10), 'date');
-        echo area('address', 'Address', $record['address'] ?? '');
         if ($edit) echo chk('active', 'Active', $record['active'] ?? 1);
+        section_end();
+        section('📍 Address', 'sec-notes');
+        echo area('address', 'Address', $record['address'] ?? '', 'span-3');
         section_end();
         form_end('suppliers');
     endif;
@@ -1767,11 +1804,13 @@ elseif ($key === 'suppliers'):
 elseif ($key === 'delivery_persons'):
     if ($isNew || $edit):
         form_start($edit ? 'Update driver' : 'Add delivery person', 'Drivers and loaders attached to sales.', 'delivery_persons', $edit);
-        section('Person');
+        section('🚛 Person Details', 'sec-customer');
         echo inp('code', 'Code', $record['code'] ?? '', 'text', false, 'placeholder="Auto if empty"');
         echo inp('name', 'Name', $record['name'] ?? '', 'text', true);
         echo inp('phone', 'Phone', $record['phone'] ?? '');
         echo inp('rate_per_trip', 'Rate per trip', $record['rate_per_trip'] ?? 0, 'number');
+        section_end();
+        section('💰 Opening Balance', 'sec-payment');
         echo inp('opening_balance', 'Opening balance', $record['opening_balance'] ?? 0, 'number');
         echo inp('opening_balance_date', 'As of', substr((string)($record['opening_balance_date'] ?? ''), 0, 10), 'date');
         if ($edit) echo chk('active', 'Active', $record['active'] ?? 1);
@@ -1803,19 +1842,25 @@ elseif ($key === 'accounts'):
     // ----- Add / edit form (same as before) -----
     if ($isNew || $edit):
         form_start($edit ? 'Update account' : 'Add account', 'Running balance is maintained by payments. Edit opening balance only.', 'accounts', $edit);
-        section('Account');
+        section('🏦 Account Details', 'sec-customer');
         echo inp('name', 'Name', $record['name'] ?? '', 'text', true);
         echo sel('account_type', 'Type', $record['account_type'] ?? 'other', ['cash_drawer' => 'Cash drawer', 'bank' => 'Bank', 'expense' => 'Expense', 'revenue' => 'Revenue', 'loan' => 'Loan', 'owner' => 'Owner', 'other' => 'Other']);
         echo sel('account_class', 'Class', $record['account_class'] ?? '', ['' => '—', 'asset' => 'Asset', 'liability' => 'Liability', 'equity' => 'Equity', 'income' => 'Income', 'expense' => 'Expense']);
         echo cat_opts('account', $record['category_id'] ?? '');
+        section_end();
+        section('🏛️ Bank Details', 'sec-delivery');
         echo inp('bank_name', 'Bank name', $record['bank_name'] ?? '');
         echo inp('account_holder_name', 'Holder name', $record['account_holder_name'] ?? '');
         echo inp('account_number', 'Account number', $record['account_number'] ?? '');
         echo inp('branch_code', 'Branch code', $record['branch_code'] ?? '');
+        section_end();
+        section('💰 Opening Balance', 'sec-payment');
         echo inp('opening_balance', 'Opening balance', $record['opening_balance'] ?? 0, 'number');
         echo inp('opening_balance_date', 'As of', substr((string)($record['opening_balance_date'] ?? ''), 0, 10), 'date');
-        echo area('note', 'Note', $record['note'] ?? '');
         if ($edit) echo chk('active', 'Active', $record['active'] ?? 1);
+        section_end();
+        section('📝 Note', 'sec-notes');
+        echo area('note', 'Note', $record['note'] ?? '', 'span-3');
         section_end();
         form_end('accounts');
 
@@ -2242,7 +2287,7 @@ elseif ($key === 'accounts'):
 elseif ($key === 'users'):
     if ($isNew || $edit):
         form_start($edit ? 'Update user' : 'Add user', 'Roles control what each person can do.', 'users', $edit);
-        section('User');
+        section('👤 User Details', 'sec-customer');
         echo inp('username', 'Username', $record['username'] ?? '', 'text', true);
         echo inp('full_name', 'Full name', $record['full_name'] ?? '', 'text', true);
         $roleOpts = [];
@@ -2251,6 +2296,8 @@ elseif ($key === 'users'):
         echo inp('phone', 'Phone', $record['phone'] ?? '');
         echo inp('email', 'Email', $record['email'] ?? '');
         echo sel('status', 'Status', $record['status'] ?? 'active', ['active' => 'Active', 'suspended' => 'Suspended', 'disabled' => 'Disabled']);
+        section_end();
+        section('🔐 Security', 'sec-payment');
         echo inp('new_password', $edit ? 'New password (blank = keep)' : 'Password', '', 'password', !$edit);
         echo chk('restrict_backdated_edit', 'Restrict backdated entries', $record['restrict_backdated_edit'] ?? 0);
         if ($edit) echo chk('active', 'Active', $record['active'] ?? 1);
