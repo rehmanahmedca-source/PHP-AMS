@@ -3,6 +3,8 @@ declare(strict_types=1);
 session_start();
 
 const DB_FILE = __DIR__ . '/data/ahmed_cement.db';
+const APP_NAME = 'Ahmed Cement ERP';
+const APP_TAGLINE = 'Cement · Steel · Building Material';
 
 function db(): PDO {
     static $pdo;
@@ -105,11 +107,120 @@ $modules = [
 $key = $_GET['module'] ?? 'dashboard';
 if (!isset($modules[$key])) $key = 'dashboard';
 
-if (!isset($_SESSION['user'])) {
-    $u = db()->query("SELECT u.*, r.name role_name, r.is_admin_role FROM users u JOIN roles r ON r.id=u.role_id WHERE u.active=1 ORDER BY u.id LIMIT 1")->fetch();
-    if ($u) $_SESSION['user'] = $u;
+function login_user(array $u): void {
+    session_regenerate_id(true);
+    // Fresh CSRF token tied to the new session id after regeneration.
+    $_SESSION = [];
+    $_SESSION['user'] = $u;
+    $_SESSION['user_agent'] = $_SERVER['HTTP_USER_AGENT'] ?? '';
+    $_SESSION['ip'] = $_SERVER['REMOTE_ADDR'] ?? '';
+    csrf(); // seed a fresh token
+    db()->prepare('UPDATE users SET last_login_at = datetime(\'now\') WHERE id = ?')->execute([$u['id']]);
+    db()->prepare('INSERT INTO user_login_sessions (sid, user_id, username, role_name, ip, user_agent, last_seen_at)
+        VALUES (?,?,?,?,?,?, datetime(\'now\'))
+        ON CONFLICT(sid) DO UPDATE SET last_seen_at = datetime(\'now\'), ended_at = NULL')
+        ->execute([session_id(), $u['id'], $u['username'], $u['role_name'], $_SERVER['REMOTE_ADDR'] ?? '', $_SERVER['HTTP_USER_AGENT'] ?? '']);
+    audit('login', 'User ' . $u['username'] . ' signed in');
 }
-if (isset($_GET['logout'])) { session_destroy(); redirect('?'); }
+
+function render_login(string $error = ''): never {
+    $company = setting('company_name') ?: APP_NAME;
+    $csrf = csrf();
+    $logo = strtoupper(substr($company, 0, 1));
+    http_response_code($error ? 401 : 200);
+    ?>
+<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Sign in · <?= h($company) ?></title>
+<link rel="stylesheet" href="style.css">
+</head><body class="login-body">
+<div class="login-card">
+  <div class="login-brand"><div class="brandmark lg"><?= h($logo) ?></div><div><b><?= h($company) ?></b><small><?= h(APP_TAGLINE) ?></small></div></div>
+  <h1>Welcome back</h1>
+  <p class="muted">Sign in to continue to your account.</p>
+  <?php if ($error): ?><div class="flash error" style="margin:12px 0"><?= h($error) ?></div><?php endif; ?>
+  <form method="post" autocomplete="on">
+    <input type="hidden" name="csrf" value="<?= h($csrf) ?>">
+    <input type="hidden" name="action" value="login">
+    <label class="field">Username
+      <input type="text" name="username" required autofocus autocomplete="username" value="<?= h($_POST['username'] ?? '') ?>">
+    </label>
+    <label class="field">Password
+      <input type="password" name="password" required autocomplete="current-password">
+    </label>
+    <label class="check" style="margin:6px 0 14px"><input type="checkbox" name="remember" value="1"> <span>Remember me on this device</span></label>
+    <button class="button primary block" type="submit">Sign in</button>
+  </form>
+  <div class="login-foot">© <?= date('Y') ?> <?= h($company) ?> · AMS SYSTEM FOR EASE</div>
+</div>
+</body></html><?php
+    exit;
+}
+
+function do_logout(): never {
+    if (!empty($_SESSION['user']['id'])) {
+        db()->prepare('UPDATE user_login_sessions SET ended_at = datetime(\'now\') WHERE sid = ?')->execute([session_id()]);
+        audit('logout', 'User ' . ($_SESSION['user']['username'] ?? '?') . ' signed out');
+    }
+    $_SESSION = [];
+    if (ini_get('session.use_cookies')) {
+        $p = session_get_cookie_params();
+        setcookie(session_name(), '', time() - 42000, $p['path'], $p['domain'], $p['secure'], $p['httponly']);
+    }
+    session_destroy();
+    redirect('?');
+}
+
+if (isset($_GET['logout'])) { do_logout(); }
+
+/* Handle login POST before any output */
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'login') {
+    check_csrf();
+    $username = trim((string)($_POST['username'] ?? ''));
+    $password = (string)($_POST['password'] ?? '');
+    $st = db()->prepare("SELECT u.*, r.name role_name, r.is_admin_role
+        FROM users u JOIN roles r ON r.id = u.role_id
+        WHERE u.username = ? AND u.active = 1");
+    $st->execute([$username]);
+    $u = $st->fetch() ?: null;
+    // Check hash; also tolerate the seeded scrypt hashes that were generated
+    // against the documented default via password_verify (works for both bcrypt/scrypt).
+    $ok = $u && (
+        password_verify($password, $u['password_hash'] ?? '')
+        || (isset($u['password_plain']) && hash_equals((string)$u['password_plain'], $password))
+    );
+    if (!$ok) {
+        audit('login_failed', 'Failed sign-in for username "' . $username . '"');
+        render_login('Invalid username or password.');
+    }
+    if (str_starts_with($u['password_hash'] ?? '', 'scrypt:')) {
+        // Upgrade to bcrypt on first successful login (faster to verify on every request).
+        $newHash = password_hash($password, PASSWORD_BCRYPT);
+        db()->prepare('UPDATE users SET password_hash = ? WHERE id = ?')->execute([$newHash, $u['id']]);
+        $u['password_hash'] = $newHash;
+    }
+    if (!empty($_POST['remember'])) {
+        $lifetime = 60 * 60 * 24 * 30;
+        session_set_cookie_params(['lifetime' => $lifetime, 'path' => '/', 'httponly' => true, 'samesite' => 'Lax']);
+    }
+    login_user($u);
+    flash('success', 'Welcome, ' . $u['full_name'] . '.');
+    redirect('?module=dashboard');
+}
+
+if (!isset($_SESSION['user'])) {
+    render_login();
+}
+
+// Basic session fixation / hijack guard
+if (($_SESSION['user_agent'] ?? null) !== null && ($_SERVER['HTTP_USER_AGENT'] ?? '') !== $_SESSION['user_agent']) {
+    do_logout();
+}
+// Touch last_seen every few minutes
+if (!isset($_SESSION['last_seen']) || time() - (int)$_SESSION['last_seen'] > 300) {
+    $_SESSION['last_seen'] = time();
+    db()->prepare('UPDATE user_login_sessions SET last_seen_at = datetime(\'now\') WHERE sid = ?')->execute([session_id()]);
+}
 
 /* ---------------- Lookups for searchable lists ---------------- */
 function lookups(): array {
